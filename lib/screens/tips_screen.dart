@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-import '../firestore_service.dart';
+import '../services/firestore_service.dart';
 import '../models/eco_tip.dart';
 import '../theme/app_theme.dart';
 import 'meal_plan_screen.dart';
@@ -38,14 +38,7 @@ class _TipsScreenState extends State<TipsScreen> {
   @override
   void initState() {
     super.initState();
-    _contentFuture =
-        FirestoreService.instance.getEducationalContent(_selectedCategory);
-    _seedAndRefresh();
-  }
-
-  Future<void> _seedAndRefresh() async {
-    await FirestoreService.instance.seedFirestoreData();
-    if (!mounted) return;
+    FirestoreService.instance.seedFirestoreData();
     _reloadContent();
   }
 
@@ -198,9 +191,9 @@ class _TipsScreenState extends State<TipsScreen> {
                   if (items.isEmpty) {
                     return _ContentMessage(
                       icon: Icons.eco_outlined,
-                      title: 'No content yet',
+                      title: 'No tips here yet',
                       subtitle:
-                          'Try another category or check your Firestore connection.',
+                          'We are growing our library. Try another category or pull to refresh in a moment.',
                       actionLabel: 'Refresh',
                       onAction: _reloadContent,
                     );

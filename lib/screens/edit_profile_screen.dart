@@ -55,32 +55,65 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     }
   }
 
+  bool _isNetworkPhotoUrl(String path) {
+    return path.startsWith('http://') || path.startsWith('https://');
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    
-    UserPreferences.instance.setUserName(_nameController.text.trim());
-    UserPreferences.instance.setUserEmail(_emailController.text.trim());
-    UserPreferences.instance.setUserGoal(_goalController.text.trim());
-    if (_avatarPath.isNotEmpty) {
-      UserPreferences.instance.setAvatarPath(_avatarPath);
-    }
-    
-    final newPassword = _passwordController.text.trim();
-    if (newPassword.isNotEmpty) {
-      try {
-        await FirebaseAuth.instance.currentUser?.updatePassword(newPassword);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Password updated successfully')),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to update password: $e')),
-          );
-        }
+
+    final newName = _nameController.text.trim();
+    final newEmail = _emailController.text.trim();
+    final newGoal = _goalController.text.trim();
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('You must be signed in to save.')),
+        );
       }
+      return;
+    }
+
+    // Firebase only accepts network URLs for photoURL; keep local paths offline-only.
+    final newAvatarPath =
+        _avatarPath.isNotEmpty && _isNetworkPhotoUrl(_avatarPath)
+            ? _avatarPath
+            : user.photoURL;
+
+    try {
+      await user.updateProfile(
+        displayName: newName,
+        photoURL: newAvatarPath,
+      );
+      await user.reload();
+
+      if (user.email != newEmail) {
+        await user.verifyBeforeUpdateEmail(newEmail);
+      }
+
+      final newPassword = _passwordController.text.trim();
+      if (newPassword.isNotEmpty) {
+        await user.updatePassword(newPassword);
+      }
+
+      final refreshed = FirebaseAuth.instance.currentUser;
+      if (refreshed != null) {
+        await UserPreferences.instance.syncWithFirebase(refreshed);
+      }
+
+      await UserPreferences.instance.setUserGoal(newGoal);
+      if (_avatarPath.isNotEmpty && !_isNetworkPhotoUrl(_avatarPath)) {
+        await UserPreferences.instance.setAvatarPath(_avatarPath);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update profile: $e')),
+        );
+      }
+      return;
     }
 
     if (mounted) {
