@@ -5,36 +5,40 @@ import '../theme/app_theme.dart';
 class EmptyStateBody extends StatelessWidget {
   final VoidCallback onCompleteAction;
   final bool isLoading;
+  final bool embedInParentScroll;
 
   const EmptyStateBody({
     super.key,
     required this.onCompleteAction,
     this.isLoading = false,
+    this.embedInParentScroll = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final children = <Widget>[
+      _WelcomeHeader(),
+      const SizedBox(height: 24),
+      _EmptyStatsBento(),
+      const SizedBox(height: 24),
+      _DailyActionCard(
+        onCompleteAction: onCompleteAction,
+        isLoading: isLoading,
+      ),
+      const SizedBox(height: 24),
+      _DidYouKnowCard(),
+    ];
+
+    if (embedInParentScroll) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children,
+      );
+    }
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      children: [
-        // ── Welcome Header ──────────────────────────────
-        _WelcomeHeader(),
-        const SizedBox(height: 24),
-
-        // ── Stats Bento Grid ────────────────────────────
-        _EmptyStatsBento(),
-        const SizedBox(height: 24),
-
-        // ── Today's Action Card ─────────────────────────
-        _DailyActionCard(
-          onCompleteAction: onCompleteAction,
-          isLoading: isLoading,
-        ),
-        const SizedBox(height: 24),
-
-        // ── Did You Know Card ───────────────────────────
-        _DidYouKnowCard(),
-      ],
+      children: children,
     );
   }
 }
@@ -86,6 +90,7 @@ class _EmptyStatsBento extends StatelessWidget {
         children: [
           Expanded(
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Expanded(
                   child: _SmallStatCard(

@@ -1,5 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:flutter/foundation.dart';
+import 'services/user_preferences.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -29,7 +31,9 @@ class AuthService {
       );
 
       // Sign in to Firebase with the Google credential
-      return await _auth.signInWithCredential(credential);
+      final cred = await _auth.signInWithCredential(credential);
+      await UserPreferences.instance.syncWithFirebase();
+      return cred;
     } catch (e) {
       debugPrint('An unexpected error occurred during Google Sign In: $e');
       return null;
@@ -43,6 +47,7 @@ class AuthService {
         email: email,
         password: password,
       );
+      await UserPreferences.instance.syncWithFirebase();
       return userCredential;
     } on FirebaseAuthException catch (e) {
       _handleAuthError(e);
@@ -60,6 +65,7 @@ class AuthService {
         email: email,
         password: password,
       );
+      await UserPreferences.instance.syncWithFirebase();
       return userCredential;
     } on FirebaseAuthException catch (e) {
       _handleAuthError(e);
@@ -94,6 +100,9 @@ class AuthService {
     try {
       await GoogleSignIn().signOut(); // Signs out of Google
       await _auth.signOut();          // Signs out of Firebase
+      
+      // Clear local preferences
+      await UserPreferences.instance.clearAuth();
     } catch (e) {
       debugPrint('Error signing out: $e');
     }

@@ -1,8 +1,13 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
+import '../database_service.dart';
 import '../models/progress_state.dart';
+import '../services/user_preferences.dart';
 import '../theme/app_theme.dart';
+import 'challenges_screen.dart';
 import 'progress_category_detail_screen.dart';
 
 class ProgressScreen extends StatelessWidget {
@@ -28,6 +33,17 @@ class ProgressScreen extends StatelessWidget {
         child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
         children: [
+          _ChallengesBanner(
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const ChallengesScreen(),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 20),
           _MetricsBento(
             metrics: metrics,
             onMetricTap: isEmpty
@@ -62,6 +78,81 @@ class ProgressScreen extends StatelessWidget {
   }
 }
 
+class _ChallengesBanner extends StatelessWidget {
+  final VoidCallback onTap;
+
+  const _ChallengesBanner({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              EcoColors.primary.withValues(alpha: 0.12),
+              EcoColors.secondaryContainer.withValues(alpha: 0.55),
+            ],
+          ),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: EcoColors.primary.withValues(alpha: 0.2),
+          ),
+        ),
+        child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: const BoxDecoration(
+                  color: EcoColors.primaryContainer,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.emoji_events_rounded,
+                  color: EcoColors.onPrimaryContainer,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'View Sustainability Challenges',
+                      style: GoogleFonts.inter(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: EcoColors.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Join Plastic-Free Week & more',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        color: EcoColors.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.chevron_right_rounded,
+                color: EcoColors.primary,
+              ),
+            ],
+          ),
+        ),
+    );
+  }
+}
+
 class _ProgressAppBar extends StatelessWidget implements PreferredSizeWidget {
   const _ProgressAppBar();
 
@@ -78,23 +169,34 @@ class _ProgressAppBar extends StatelessWidget implements PreferredSizeWidget {
       titleSpacing: 16,
       title: Row(
         children: [
-          Container(
-            width: 32,
-            height: 32,
-            decoration: const BoxDecoration(
-              shape: BoxShape.circle,
-              color: EcoColors.secondaryContainer,
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Image.network(
-              'https://i.pravatar.cc/80?img=33',
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => const Icon(
-                Icons.person,
-                size: 18,
-                color: EcoColors.secondary,
-              ),
-            ),
+          ValueListenableBuilder<String>(
+            valueListenable: UserPreferences.instance.avatarPath,
+            builder: (context, avatarPath, _) {
+              return Container(
+                width: 32,
+                height: 32,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: EcoColors.secondaryContainer,
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: avatarPath.isEmpty
+                    ? (FirebaseAuth.instance.currentUser?.photoURL != null
+                        ? Image.network(
+                            FirebaseAuth.instance.currentUser!.photoURL!,
+                            fit: BoxFit.cover,
+                          )
+                        : const Icon(
+                            Icons.person,
+                            size: 18,
+                            color: EcoColors.secondary,
+                          ))
+                    : Image.file(
+                        File(avatarPath),
+                        fit: BoxFit.cover,
+                      ),
+              );
+            },
           ),
           const SizedBox(width: 12),
           Text(
@@ -386,18 +488,41 @@ class _ActiveOverview extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              _OverviewChip(
-                icon: Icons.trending_up_rounded,
-                label: 'Best day: Wed',
-              ),
-              const SizedBox(width: 10),
-              _OverviewChip(
-                icon: Icons.eco_rounded,
-                label: '4 actions logged',
-              ),
-            ],
+          FutureBuilder<List<int>>(
+            future: Future.wait([
+              DatabaseService.instance.getTasksCompleted(FirebaseAuth.instance.currentUser?.uid ?? ''),
+              DatabaseService.instance.getCurrentStreak(FirebaseAuth.instance.currentUser?.uid ?? ''),
+            ]),
+            builder: (context, snapshot) {
+              if (snapshot.connectionState == ConnectionState.waiting) {
+                return const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(8.0),
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: EcoColors.primary),
+                    ),
+                  ),
+                );
+              }
+              final int tasksCompleted = snapshot.data?[0] ?? 0;
+              final int currentStreak = snapshot.data?[1] ?? 0;
+
+              return Row(
+                children: [
+                  _OverviewChip(
+                    icon: Icons.local_fire_department_rounded,
+                    label: 'Current Streak: $currentStreak',
+                  ),
+                  const SizedBox(width: 10),
+                  _OverviewChip(
+                    icon: Icons.check_circle_rounded,
+                    label: 'Tasks Completed: $tasksCompleted',
+                  ),
+                ],
+              );
+            },
           ),
         ],
       ),

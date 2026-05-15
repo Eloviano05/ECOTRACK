@@ -1,11 +1,15 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 import '../models/profile_state.dart';
+import '../services/user_preferences.dart';
 import '../theme/app_theme.dart';
 
 class EditProfileScreen extends StatefulWidget {
-  final UserProfile profile;
+  final UserProfile profile; // Keeping for goalTitle backwards compatibility
 
   const EditProfileScreen({super.key, required this.profile});
 
@@ -17,14 +21,19 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   late final TextEditingController _nameController;
   late final TextEditingController _emailController;
   late final TextEditingController _goalController;
+  late final TextEditingController _passwordController;
   final _formKey = GlobalKey<FormState>();
+  
+  String _avatarPath = '';
 
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.profile.displayName);
-    _emailController = TextEditingController(text: widget.profile.email);
-    _goalController = TextEditingController(text: widget.profile.goalTitle);
+    _nameController = TextEditingController(text: UserPreferences.instance.userName.value);
+    _emailController = TextEditingController(text: UserPreferences.instance.userEmail.value);
+    _goalController = TextEditingController(text: UserPreferences.instance.userGoal.value);
+    _passwordController = TextEditingController();
+    _avatarPath = UserPreferences.instance.avatarPath.value;
   }
 
   @override
@@ -32,19 +41,51 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _nameController.dispose();
     _emailController.dispose();
     _goalController.dispose();
+    _passwordController.dispose();
     super.dispose();
   }
 
-  void _save() {
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+    if (pickedFile != null) {
+      setState(() {
+        _avatarPath = pickedFile.path;
+      });
+    }
+  }
+
+  Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
-    Navigator.pop(
-      context,
-      widget.profile.copyWith(
-        displayName: _nameController.text.trim(),
-        email: _emailController.text.trim(),
-        goalTitle: _goalController.text.trim(),
-      ),
-    );
+    
+    UserPreferences.instance.setUserName(_nameController.text.trim());
+    UserPreferences.instance.setUserEmail(_emailController.text.trim());
+    UserPreferences.instance.setUserGoal(_goalController.text.trim());
+    if (_avatarPath.isNotEmpty) {
+      UserPreferences.instance.setAvatarPath(_avatarPath);
+    }
+    
+    final newPassword = _passwordController.text.trim();
+    if (newPassword.isNotEmpty) {
+      try {
+        await FirebaseAuth.instance.currentUser?.updatePassword(newPassword);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Password updated successfully')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to update password: $e')),
+          );
+        }
+      }
+    }
+
+    if (mounted) {
+      Navigator.pop(context);
+    }
   }
 
   @override
@@ -78,7 +119,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
           children: [
-            _PhotoSection(photoUrl: widget.profile.photoUrl),
+            _PhotoSection(
+              avatarPath: _avatarPath,
+              onChangePhoto: _pickImage,
+            ),
             const SizedBox(height: 32),
             _ProfileTextField(
               label: 'Full Name',
@@ -108,12 +152,27 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
               validator: (v) =>
                   v == null || v.trim().isEmpty ? 'Enter your goal' : null,
             ),
+            const SizedBox(height: 20),
+            _ProfileTextField(
+              label: 'New Password (Optional)',
+              controller: _passwordController,
+              icon: Icons.lock_outline_rounded,
+              obscureText: true,
+              validator: (v) {
+                if (v != null && v.isNotEmpty && v.length < 6) {
+                  return 'Password must be at least 6 characters';
+                }
+                return null;
+              },
+            ),
             const SizedBox(height: 32),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
                 onPressed: _save,
                 style: ElevatedButton.styleFrom(
+                  backgroundColor: EcoColors.primary,
+                  foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12),
@@ -137,9 +196,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 }
 
 class _PhotoSection extends StatelessWidget {
-  final String? photoUrl;
+  final String avatarPath;
+  final VoidCallback onChangePhoto;
 
-  const _PhotoSection({this.photoUrl});
+  const _PhotoSection({required this.avatarPath, required this.onChangePhoto});
 
   @override
   Widget build(BuildContext context) {
@@ -158,11 +218,10 @@ class _PhotoSection extends StatelessWidget {
                 ],
               ),
               clipBehavior: Clip.antiAlias,
-              child: photoUrl != null
-                  ? Image.network(
-                      photoUrl!,
+              child: avatarPath.isNotEmpty
+                  ? Image.file(
+                      File(avatarPath),
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => _fallback(),
                     )
                   : _fallback(),
             ),
@@ -170,7 +229,7 @@ class _PhotoSection extends StatelessWidget {
         ),
         const SizedBox(height: 14),
         TextButton.icon(
-          onPressed: () {},
+          onPressed: onChangePhoto,
           icon: const Icon(Icons.edit_rounded, size: 18),
           label: Text(
             'Change Photo',
@@ -206,6 +265,7 @@ class _ProfileTextField extends StatelessWidget {
   final IconData icon;
   final int maxLines;
   final TextInputType? keyboardType;
+  final bool obscureText;
   final String? Function(String?)? validator;
 
   const _ProfileTextField({
@@ -214,6 +274,7 @@ class _ProfileTextField extends StatelessWidget {
     required this.icon,
     this.maxLines = 1,
     this.keyboardType,
+    this.obscureText = false,
     this.validator,
   });
 
@@ -233,8 +294,9 @@ class _ProfileTextField extends StatelessWidget {
         const SizedBox(height: 8),
         TextFormField(
           controller: controller,
-          maxLines: maxLines,
+          maxLines: obscureText ? 1 : maxLines,
           keyboardType: keyboardType,
+          obscureText: obscureText,
           validator: validator,
           style: GoogleFonts.inter(color: EcoColors.onSurface),
           decoration: InputDecoration(

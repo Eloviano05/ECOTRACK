@@ -7,38 +7,42 @@ class ActiveStateBody extends StatelessWidget {
   final DashboardState state;
   final bool showCelebration;
   final VoidCallback? onDismissCelebration;
+  final bool embedInParentScroll;
 
   const ActiveStateBody({
     super.key,
     required this.state,
     this.showCelebration = false,
     this.onDismissCelebration,
+    this.embedInParentScroll = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final children = <Widget>[
+      _HeroStatsRow(state: state),
+      const SizedBox(height: 16),
+      _CompletedActionCard(
+        points: state.points,
+        showCelebration: showCelebration,
+        onContinue: onDismissCelebration,
+      ),
+      const SizedBox(height: 16),
+      _InsightsBento(weeklyGoal: state.weeklyGoalPercent),
+      const SizedBox(height: 24),
+      _YourJourneySection(activities: state.recentActivities),
+    ];
+
+    if (embedInParentScroll) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: children,
+      );
+    }
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-      children: [
-        // ── Hero Stats Row ──────────────────────────────
-        _HeroStatsRow(state: state),
-        const SizedBox(height: 16),
-
-        // ── Today's Action – Completed ──────────────────
-        _CompletedActionCard(
-          points: state.points,
-          showCelebration: showCelebration,
-          onContinue: onDismissCelebration,
-        ),
-        const SizedBox(height: 16),
-
-        // ── Bento Grid: Tip + Weekly Goal ───────────────
-        _InsightsBento(weeklyGoal: state.weeklyGoalPercent),
-        const SizedBox(height: 24),
-
-        // ── Your Journey ────────────────────────────────
-        _YourJourneySection(activities: state.recentActivities),
-      ],
+      children: children,
     );
   }
 }

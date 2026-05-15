@@ -146,4 +146,60 @@ CREATE TABLE user_challenge (
       whereArgs: [challengeRecordId],
     );
   }
+
+  Future<int> getTasksCompleted(String userId) async {
+    final db = await instance.database;
+    final carbonResult = await db.rawQuery('SELECT COUNT(*) as count FROM carbon_log WHERE user_id = ?', [userId]);
+    final wasteResult = await db.rawQuery('SELECT COUNT(*) as count FROM waste_log WHERE user_id = ?', [userId]);
+    
+    int carbonCount = Sqflite.firstIntValue(carbonResult) ?? 0;
+    int wasteCount = Sqflite.firstIntValue(wasteResult) ?? 0;
+    
+    return carbonCount + wasteCount;
+  }
+
+  Future<int> getCurrentStreak(String userId) async {
+    final db = await instance.database;
+    
+    final carbonDates = await db.rawQuery('SELECT DISTINCT date FROM carbon_log WHERE user_id = ?', [userId]);
+    final wasteDates = await db.rawQuery('SELECT DISTINCT date FROM waste_log WHERE user_id = ?', [userId]);
+    
+    Set<String> uniqueDates = {};
+    for (var row in carbonDates) {
+      if (row['date'] != null) uniqueDates.add(row['date'].toString());
+    }
+    for (var row in wasteDates) {
+      if (row['date'] != null) uniqueDates.add(row['date'].toString());
+    }
+    
+    List<String> sortedDates = uniqueDates.toList()..sort((a, b) => b.compareTo(a));
+    
+    if (sortedDates.isEmpty) return 0;
+    
+    DateTime today = DateTime.now();
+    String todayStr = today.toIso8601String().split('T').first;
+    String yesterdayStr = today.subtract(const Duration(days: 1)).toIso8601String().split('T').first;
+    
+    int streak = 0;
+    DateTime currentDateToMatch = today;
+    
+    if (sortedDates.first != todayStr && sortedDates.first != yesterdayStr) {
+      return 0;
+    }
+    
+    if (sortedDates.first == yesterdayStr) {
+       currentDateToMatch = today.subtract(const Duration(days: 1));
+    }
+    
+    for (String dateStr in sortedDates) {
+      if (dateStr == currentDateToMatch.toIso8601String().split('T').first) {
+        streak++;
+        currentDateToMatch = currentDateToMatch.subtract(const Duration(days: 1));
+      } else {
+        break;
+      }
+    }
+    
+    return streak;
+  }
 }
