@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
+import 'models/dashboard_state.dart';
 import 'services/firestore_service.dart';
 
 class DatabaseService {
@@ -335,5 +336,106 @@ CREATE TABLE meal_plans (
     }
     
     return weeklyActivity;
+  }
+
+  /// Returns the last [limit] activities across carbon_log and waste_log,
+  /// mapped to [JourneyActivity] for display in the Journey section.
+  Future<List<JourneyActivity>> getRecentActivities(
+    String userId, {
+    int limit = 5,
+  }) async {
+    final db = await instance.database;
+
+    final carbonRows = await db.rawQuery(
+      'SELECT category, subcategory, date, carbon_kg FROM carbon_log '
+      'WHERE user_id = ? ORDER BY id DESC LIMIT ?',
+      [userId, limit],
+    );
+
+    final wasteRows = await db.rawQuery(
+      'SELECT action_type, date, waste_saved_kg FROM waste_log '
+      'WHERE user_id = ? ORDER BY id DESC LIMIT ?',
+      [userId, limit],
+    );
+
+    // Convert carbon rows
+    final List<Map<String, dynamic>> merged = [
+      ...carbonRows.map((r) => {
+            'title': _carbonLabel(r['category'] as String? ?? ''),
+            'subtitle': _fmtDate(r['date'] as String? ?? '') +
+                ' · Saved ${((r['carbon_kg'] as num?)?.toStringAsFixed(1) ?? '0.0')}kg CO₂',
+            'iconName': _carbonIcon(r['category'] as String? ?? ''),
+            'ts': r['date'] as String? ?? '',
+          }),
+      ...wasteRows.map((r) => {
+            'title': _wasteLabel(r['action_type'] as String? ?? ''),
+            'subtitle': _fmtDate(r['date'] as String? ?? '') +
+                ' · Saved ${((r['waste_saved_kg'] as num?)?.toStringAsFixed(2) ?? '0.00')}kg waste',
+            'iconName': _wasteIcon(r['action_type'] as String? ?? ''),
+            'ts': r['date'] as String? ?? '',
+          }),
+    ];
+
+    // Sort by date descending and take top [limit]
+    merged.sort((a, b) =>
+        (b['ts'] as String).compareTo(a['ts'] as String));
+    final top = merged.take(limit).toList();
+
+    return top
+        .map((m) => JourneyActivity(
+              title: m['title'] as String,
+              subtitle: m['subtitle'] as String,
+              iconName: m['iconName'] as String,
+            ))
+        .toList();
+  }
+
+  static String _fmtDate(String iso) {
+    if (iso.isEmpty) return '';
+    final today = DateTime.now().toIso8601String().split('T').first;
+    final yesterday = DateTime.now()
+        .subtract(const Duration(days: 1))
+        .toIso8601String()
+        .split('T')
+        .first;
+    if (iso == today) return 'Today';
+    if (iso == yesterday) return 'Yesterday';
+    return iso;
+  }
+
+  static String _carbonLabel(String cat) {
+    const labels = {
+      'Car': 'Drove by Car',
+      'Electricity': 'Used Electricity',
+      'Meat meal': 'Had a Meat Meal',
+    };
+    return labels[cat] ?? cat;
+  }
+
+  static String _carbonIcon(String cat) {
+    const icons = {
+      'Car': 'directions_walk',
+      'Electricity': 'eco',
+      'Meat meal': 'restaurant',
+    };
+    return icons[cat] ?? 'eco';
+  }
+
+  static String _wasteLabel(String action) {
+    const labels = {
+      'reusable_bottle': 'Used Reusable Bottle',
+      'compost': 'Composted Organic Waste',
+      'recycle_can': 'Recycled Aluminium Can',
+    };
+    return labels[action] ?? action;
+  }
+
+  static String _wasteIcon(String action) {
+    const icons = {
+      'reusable_bottle': 'eco',
+      'compost': 'compost',
+      'recycle_can': 'eco',
+    };
+    return icons[action] ?? 'eco';
   }
 }

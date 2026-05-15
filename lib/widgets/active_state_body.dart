@@ -1,7 +1,11 @@
+import 'dart:math';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../theme/app_theme.dart';
+import '../database_service.dart';
 import '../models/dashboard_state.dart';
+import '../services/firestore_service.dart';
+import '../theme/app_theme.dart';
 
 class ActiveStateBody extends StatelessWidget {
   final DashboardState state;
@@ -19,18 +23,43 @@ class ActiveStateBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? '';
+
     final children = <Widget>[
-      _HeroStatsRow(state: state),
-      const SizedBox(height: 16),
-      _CompletedActionCard(
-        points: state.points,
-        showCelebration: showCelebration,
-        onContinue: onDismissCelebration,
+      // Block 1: Streak + Impact — live Firestore user doc
+      StreamBuilder(
+        stream: FirestoreService.instance.getUserStream(uid),
+        builder: (context, snapshot) {
+          final data = snapshot.data?.data();
+          final streak = data?['currentStreak'] as int? ?? state.dayStreak;
+          final co2 = (data?['co2Saved'] as num?)?.toDouble() ?? state.kgSaved;
+          final pct = data?['changePercent'] as int? ?? 12;
+          return _HeroStatsRow(
+            state: state.copyWith(dayStreak: streak, kgSaved: co2),
+            changePercent: pct,
+          );
+        },
       ),
       const SizedBox(height: 16),
-      _InsightsBento(weeklyGoal: state.weeklyGoalPercent),
+      // Block 2: Daily habit / points — live tasksCompleted
+      StreamBuilder(
+        stream: FirestoreService.instance.getUserStream(uid),
+        builder: (context, snapshot) {
+          final data = snapshot.data?.data();
+          final pts = data?['tasksCompleted'] as int? ?? state.points;
+          return _CompletedActionCard(
+            points: pts * 10,
+            showCelebration: showCelebration,
+            onContinue: onDismissCelebration,
+          );
+        },
+      ),
+      const SizedBox(height: 16),
+      // Block 3: Did you know + Weekly Goal — live Firestore tip + SQLite weekly
+      _LiveInsightsBento(userId: uid),
       const SizedBox(height: 24),
-      _YourJourneySection(activities: state.recentActivities),
+      // Block 4: Your Journey — live SQLite logs
+      _LiveJourneySection(userId: uid),
     ];
 
     if (embedInParentScroll) {
@@ -52,8 +81,9 @@ class ActiveStateBody extends StatelessWidget {
 // ─────────────────────────────────────────────────────────
 class _HeroStatsRow extends StatelessWidget {
   final DashboardState state;
+  final int changePercent;
 
-  const _HeroStatsRow({required this.state});
+  const _HeroStatsRow({required this.state, this.changePercent = 12});
 
   @override
   Widget build(BuildContext context) {
@@ -69,7 +99,10 @@ class _HeroStatsRow extends StatelessWidget {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: _ImpactCard(kgSaved: state.kgSaved),
+            child: _ImpactCard(
+              kgSaved: state.kgSaved,
+              changePercent: changePercent,
+            ),
           ),
         ],
       ),
@@ -163,8 +196,9 @@ class _StreakCard extends StatelessWidget {
 
 class _ImpactCard extends StatelessWidget {
   final double kgSaved;
+  final int changePercent;
 
-  const _ImpactCard({required this.kgSaved});
+  const _ImpactCard({required this.kgSaved, this.changePercent = 12});
 
   @override
   Widget build(BuildContext context) {
@@ -505,12 +539,71 @@ class _CompactCompletedCard extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────
-// Insights Bento (Tip + Weekly Goal)
+// Live Insights Bento — Firestore tip + SQLite weekly goal
 // ─────────────────────────────────────────────────────────
+class _LiveInsightsBento extends StatefulWidget {
+  final String userId;
+  const _LiveInsightsBento({required this.userId});
+
+  @override
+  State<_LiveInsightsBento> createState() => _LiveInsightsBentoState();
+}
+
+class _LiveInsightsBentoState extends State<_LiveInsightsBento> {
+  late Future<_InsightData> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<_InsightData> _load() async {
+    final tips = await FirestoreService.instance
+        .getEducationalContent('energy_tips');
+    String tip = 'LED bulbs use 75% less energy and last 25× longer than incandescent lighting.';
+    if (tips.isNotEmpty) {
+      final pick = tips[Random().nextInt(tips.length)];
+      tip = pick['summary'] as String? ?? tip;
+    }
+    final weekly = await DatabaseService.instance
+        .getWeeklyActivity(widget.userId);
+    final done = weekly.where((d) => d == 1).length;
+    final total = weekly.where((d) => d != -1).length;
+    final pct = total > 0 ? done / total : 0.0;
+    final daysLeft = weekly.where((d) => d == -1).length;
+    return _InsightData(tip: tip, weeklyGoal: pct, daysLeft: daysLeft);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<_InsightData>(
+      future: _future,
+      builder: (context, snapshot) {
+        final data = snapshot.data;
+        return _InsightsBento(
+          weeklyGoal: data?.weeklyGoal ?? 0.0,
+          tip: data?.tip ?? 'LED bulbs use 75% less energy and last 25× longer than incandescent lighting.',
+          daysLeft: data?.daysLeft ?? 0,
+        );
+      },
+    );
+  }
+}
+
+class _InsightData {
+  final String tip;
+  final double weeklyGoal;
+  final int daysLeft;
+  const _InsightData({required this.tip, required this.weeklyGoal, required this.daysLeft});
+}
+
 class _InsightsBento extends StatelessWidget {
   final double weeklyGoal;
+  final String tip;
+  final int daysLeft;
 
-  const _InsightsBento({required this.weeklyGoal});
+  const _InsightsBento({required this.weeklyGoal, required this.tip, required this.daysLeft});
 
   @override
   Widget build(BuildContext context) {
@@ -557,7 +650,7 @@ class _InsightsBento extends StatelessWidget {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'LED bulbs use 75% less energy and last 25× longer than incandescent lighting.',
+                        tip,
                         style: GoogleFonts.inter(
                           fontSize: 12,
                           color: EcoColors.onSurfaceVariant,
@@ -618,7 +711,9 @@ class _InsightsBento extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Almost there! 2 more days to go.',
+                  daysLeft > 0
+                      ? '$daysLeft more day${daysLeft == 1 ? '' : 's'} to go!'
+                      : 'Weekly goal complete! 🎉',
                   style: GoogleFonts.inter(
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
@@ -631,6 +726,42 @@ class _InsightsBento extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// Live Your Journey — SQLite carbon_log + waste_log
+// ─────────────────────────────────────────────────────────
+class _LiveJourneySection extends StatefulWidget {
+  final String userId;
+  const _LiveJourneySection({required this.userId});
+
+  @override
+  State<_LiveJourneySection> createState() => _LiveJourneySectionState();
+}
+
+class _LiveJourneySectionState extends State<_LiveJourneySection> {
+  late Future<List<JourneyActivity>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = _load();
+  }
+
+  Future<List<JourneyActivity>> _load() async {
+    return DatabaseService.instance.getRecentActivities(widget.userId);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<List<JourneyActivity>>(
+      future: _future,
+      builder: (context, snapshot) {
+        final activities = snapshot.data ?? const [];
+        return _YourJourneySection(activities: activities);
+      },
     );
   }
 }
