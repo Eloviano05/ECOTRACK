@@ -64,6 +64,8 @@ class DefaultFirebaseOptions {
     messagingSenderId: '23962399848',
     projectId: 'ecotrack-f6155',
     storageBucket: 'ecotrack-f6155.firebasestorage.app',
+    androidClientId: '23962399848-3hp4maij3v0v0s68a7lfoq88rtknjmj8.apps.googleusercontent.com',
+    iosClientId: '23962399848-b06ck6589j0c97ic7kacm8e6qp3g83r1.apps.googleusercontent.com',
     iosBundleId: 'com.example.ecotrack',
   );
 
@@ -73,6 +75,8 @@ class DefaultFirebaseOptions {
     messagingSenderId: '23962399848',
     projectId: 'ecotrack-f6155',
     storageBucket: 'ecotrack-f6155.firebasestorage.app',
+    androidClientId: '23962399848-3hp4maij3v0v0s68a7lfoq88rtknjmj8.apps.googleusercontent.com',
+    iosClientId: '23962399848-b06ck6589j0c97ic7kacm8e6qp3g83r1.apps.googleusercontent.com',
     iosBundleId: 'com.example.ecotrack',
   );
 
@@ -85,4 +89,5 @@ class DefaultFirebaseOptions {
     storageBucket: 'ecotrack-f6155.firebasestorage.app',
     measurementId: 'G-WV6QFJEELV',
   );
+
 }

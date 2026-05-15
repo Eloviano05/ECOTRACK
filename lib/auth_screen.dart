@@ -57,7 +57,74 @@ class _AuthScreenState extends State<AuthScreen> {
         ),
       );
     }
-    // If result != null, the authStateChanges stream will handle the navigation automatically.
+  }
+
+  Future<void> _submitPasswordReset() async {
+    final email = _emailController.text.trim();
+    
+    if (email.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Please enter your email address first.',
+            style: TextStyle(color: Colors.white),
+          ),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    final authService = Provider.of<AuthService>(context, listen: false);
+    final result = await authService.resetPassword(email);
+
+    setState(() {
+      _isLoading = false;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result,
+            style: const TextStyle(color: Colors.white),
+          ),
+          backgroundColor: result == 'success' ? const Color(0xFF2E7D32) : Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _submitGoogleAuth() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    final authService = Provider.of<AuthService>(context, listen: false);
+    final result = await authService.signInWithGoogle();
+
+    setState(() {
+      _isLoading = false;
+    });
+
+    if (result == null && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Google Sign-In failed or was canceled.',
+            style: TextStyle(color: Colors.white),
+          ),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   void _toggleAuthMode() {
@@ -88,10 +155,10 @@ class _AuthScreenState extends State<AuthScreen> {
                 color: primaryGreen,
               ),
               const SizedBox(height: 16),
-              Text(
+              const Text(
                 'Eco-Step',
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 28,
                   fontWeight: FontWeight.bold,
                   color: primaryGreen,
@@ -120,6 +187,7 @@ class _AuthScreenState extends State<AuthScreen> {
                   child: Form(
                     key: _formKey,
                     child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         TextFormField(
                           controller: _emailController,
@@ -164,11 +232,36 @@ class _AuthScreenState extends State<AuthScreen> {
                             return null;
                           },
                         ),
-                        const SizedBox(height: 24),
                         
-                        // Submit Button
+                        // Forgot Password Button (Only in Login Mode)
+                        if (_isLogin) ...[
+                          const SizedBox(height: 8),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: _isLoading ? null : _submitPasswordReset,
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.grey.shade600,
+                                padding: EdgeInsets.zero,
+                                minimumSize: Size.zero,
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                              child: const Text(
+                                'Forgot Password?',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ] else ...[
+                          const SizedBox(height: 24),
+                        ],
+                        
+                        // Email Submit Button
                         SizedBox(
-                          width: double.infinity,
                           height: 50,
                           child: ElevatedButton(
                             onPressed: _isLoading ? null : _submitAuthForm,
@@ -196,6 +289,57 @@ class _AuthScreenState extends State<AuthScreen> {
                                       fontWeight: FontWeight.w600,
                                     ),
                                   ),
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        
+                        // OR Divider
+                        Row(
+                          children: [
+                            Expanded(child: Divider(color: Colors.grey.shade300, thickness: 1)),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                              child: Text(
+                                'OR',
+                                style: TextStyle(
+                                  color: Colors.grey.shade500, 
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                            Expanded(child: Divider(color: Colors.grey.shade300, thickness: 1)),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        
+                        // Google Sign-In Button
+                        SizedBox(
+                          height: 50,
+                          child: OutlinedButton.icon(
+                            onPressed: _isLoading ? null : _submitGoogleAuth,
+                            icon: const Text(
+                              'G',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: primaryGreen,
+                              ),
+                            ),
+                            label: const Text(
+                              'Sign in with Google',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: primaryGreen,
+                              ),
+                            ),
+                            style: OutlinedButton.styleFrom(
+                              backgroundColor: Colors.white,
+                              side: const BorderSide(color: primaryGreen, width: 1.5),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
                           ),
                         ),
                       ],

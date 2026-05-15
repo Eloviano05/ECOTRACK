@@ -12,7 +12,20 @@
           "package_name": "com.example.ecotrack"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "23962399848-3hp4maij3v0v0s68a7lfoq88rtknjmj8.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.ecotrack",
+            "certificate_hash": "367858582bc82fb1d5b15974abfd18ae076c6edd"
+          }
+        },
+        {
+          "client_id": "23962399848-50qpp0auabok3h10nf6rjhdufjdmq1kf.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyCj9_YAxAAqfa7M19YFQg63fR_sP4NeBVc"
@@ -20,7 +33,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "23962399848-50qpp0auabok3h10nf6rjhdufjdmq1kf.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "23962399848-b06ck6589j0c97ic7kacm8e6qp3g83r1.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.ecotrack"
+              }
+            }
+          ]
         }
       }
     }

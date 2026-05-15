@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -8,6 +9,32 @@ class AuthService {
 
   // Get current user UID directly
   String? get currentUid => _auth.currentUser?.uid;
+
+  // Sign In with Google (Updated null-safe version)
+  Future<UserCredential?> signInWithGoogle() async {
+    try {
+      // Trigger the authentication flow
+      final GoogleSignInAccount? googleUser = await GoogleSignIn().signIn();
+
+      // If the user cancels the pop-up, return null
+      if (googleUser == null) return null;
+
+      // Obtain the auth details from the request
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+
+      // Create a new credential
+      final AuthCredential credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      // Sign in to Firebase with the Google credential
+      return await _auth.signInWithCredential(credential);
+    } catch (e) {
+      debugPrint('An unexpected error occurred during Google Sign In: $e');
+      return null;
+    }
+  }
 
   // Task 1 & 3: Sign Up with Email and Password
   Future<UserCredential?> signUp(String email, String password) async {
@@ -43,10 +70,30 @@ class AuthService {
     }
   }
 
-  // Task 1: Sign Out
+  // Password Recovery
+  Future<String> resetPassword(String email) async {
+    try {
+      await _auth.sendPasswordResetEmail(email: email);
+      return 'success'; // Return a success message
+    } on FirebaseAuthException catch (e) {
+      // Return clean error strings for the UI
+      if (e.code == 'user-not-found') {
+        return 'No user found for that email.';
+      } else if (e.code == 'invalid-email') {
+        return 'The email address is poorly formatted.';
+      } else {
+        return e.message ?? 'An unknown Firebase error occurred.';
+      }
+    } catch (e) {
+      return 'An unexpected error occurred during password reset.';
+    }
+  }
+
+  // Updated Sign Out
   Future<void> signOut() async {
     try {
-      await _auth.signOut();
+      await GoogleSignIn().signOut(); // Signs out of Google
+      await _auth.signOut();          // Signs out of Firebase
     } catch (e) {
       debugPrint('Error signing out: $e');
     }
