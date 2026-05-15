@@ -1,5 +1,8 @@
-import 'package:sqflite/sqflite.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:path/path.dart';
+import 'package:sqflite/sqflite.dart';
+
+import 'services/firestore_service.dart';
 
 class DatabaseService {
   static final DatabaseService instance = DatabaseService._init();
@@ -57,6 +60,16 @@ CREATE TABLE user_challenge (
   is_completed INTEGER DEFAULT 0
 )
 ''');
+
+    await db.execute('''
+CREATE TABLE meal_plans (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  date TEXT NOT NULL,
+  recipe_title TEXT NOT NULL,
+  created_at TEXT NOT NULL
+)
+''');
   }
 
   // Task 2: Tracking Logic
@@ -84,6 +97,18 @@ CREATE TABLE user_challenge (
       'quantity': quantity,
       'carbon_kg': carbonKg,
     });
+
+    // Mock impact calculation for carbon logging
+    final mockCo2 = carbonKg;
+    final mockWater = 5.0; // 5L water saved per carbon action
+    final mockEnergy = 0.5; // 0.5 kWh energy saved per carbon action
+
+    await _syncTasksCompletedToCloud(
+      userId,
+      co2: mockCo2,
+      water: mockWater,
+      energy: mockEnergy,
+    );
   }
 
   // Task 3: Data Retrieval
@@ -122,6 +147,41 @@ CREATE TABLE user_challenge (
       'quantity': quantity,
       'waste_saved_kg': wasteSavedKg,
     });
+
+    // Mock impact calculation for waste logging
+    final mockCo2 = wasteSavedKg * 0.5; // 0.5 kg CO2 saved per kg waste
+    final mockWater = wasteSavedKg * 100.0; // 100L water saved per kg waste
+    final mockEnergy = 0.2; // 0.2 kWh energy saved per waste action
+
+    await _syncTasksCompletedToCloud(
+      userId,
+      co2: mockCo2,
+      water: mockWater,
+      energy: mockEnergy,
+    );
+  }
+
+  Future<void> _syncTasksCompletedToCloud(
+    String userId, {
+    double co2 = 0.0,
+    double water = 0.0,
+    double energy = 0.0,
+  }) async {
+    try {
+      await FirebaseFirestore.instance.collection('users').doc(userId).update({
+        'tasksCompleted': FieldValue.increment(1),
+        if (co2 > 0) 'co2Saved': FieldValue.increment(co2),
+        if (water > 0) 'waterSaved': FieldValue.increment(water),
+        if (energy > 0) 'energySaved': FieldValue.increment(energy),
+      });
+    } catch (_) {
+      await FirestoreService.instance.incrementTasksCompleted(
+        userId,
+        co2: co2,
+        water: water,
+        energy: energy,
+      );
+    }
   }
 
   // Challenge Tracking Logic
@@ -201,5 +261,79 @@ CREATE TABLE user_challenge (
     }
     
     return streak;
+  }
+
+  // Meal Plan Methods
+  Future<int> insertMealPlan(String userId, String date, String recipeTitle) async {
+    final db = await instance.database;
+    String createdAt = DateTime.now().toIso8601String();
+
+    return await db.insert('meal_plans', {
+      'user_id': userId,
+      'date': date,
+      'recipe_title': recipeTitle,
+      'created_at': createdAt,
+    });
+  }
+
+  Future<List<Map<String, dynamic>>> getMealPlans(String userId) async {
+    final db = await instance.database;
+
+    final result = await db.rawQuery(
+      'SELECT * FROM meal_plans WHERE user_id = ? ORDER BY date ASC',
+      [userId],
+    );
+
+    return result.map((row) => Map<String, dynamic>.from(row)).toList();
+  }
+
+  // Weekly Activity Time-Series
+  Future<List<int>> getWeeklyActivity(String userId) async {
+    final db = await instance.database;
+    final now = DateTime.now();
+    final monday = now.subtract(Duration(days: now.weekday - 1));
+    
+    final weeklyActivity = <int>[];
+    
+    for (int i = 0; i < 7; i++) {
+      final day = monday.add(Duration(days: i));
+      final dayStr = day.toIso8601String().split('T').first;
+      
+      // Check if this day is in the future
+      if (day.isAfter(now)) {
+        weeklyActivity.add(-1); // Future day
+        continue;
+      }
+      
+      // Query carbon_log for this day
+      final carbonResult = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM carbon_log WHERE user_id = ? AND date = ?',
+        [userId, dayStr],
+      );
+      final carbonCount = Sqflite.firstIntValue(carbonResult) ?? 0;
+      
+      // Query waste_log for this day
+      final wasteResult = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM waste_log WHERE user_id = ? AND date = ?',
+        [userId, dayStr],
+      );
+      final wasteCount = Sqflite.firstIntValue(wasteResult) ?? 0;
+      
+      // Query user_challenge for this day (date_joined or completed_days containing this date)
+      final challengeResult = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM user_challenge WHERE user_id = ? AND date_joined = ?',
+        [userId, dayStr],
+      );
+      final challengeCount = Sqflite.firstIntValue(challengeResult) ?? 0;
+      
+      // If any activity was logged on this day, mark as completed
+      if (carbonCount > 0 || wasteCount > 0 || challengeCount > 0) {
+        weeklyActivity.add(1); // Completed
+      } else {
+        weeklyActivity.add(0); // Missed past day
+      }
+    }
+    
+    return weeklyActivity;
   }
 }

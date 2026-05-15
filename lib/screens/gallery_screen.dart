@@ -1,82 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../services/firestore_service.dart';
 import '../theme/app_theme.dart';
 
 class _GalleryItem {
   const _GalleryItem({
+    required this.imageUrl,
     required this.title,
     required this.tag,
-    required this.imageUrl,
   });
 
+  final String imageUrl;
   final String title;
   final String tag;
-  final String imageUrl;
 }
-
-const _kGalleryItems = [
-  _GalleryItem(
-    title: 'Solar rooftop garden',
-    tag: 'energy',
-    imageUrl:
-        'https://images.unsplash.com/photo-1509391366360-2e959784a276?w=600&q=80',
-  ),
-  _GalleryItem(
-    title: 'Zero-waste kitchen',
-    tag: 'home',
-    imageUrl:
-        'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?w=600&q=80',
-  ),
-  _GalleryItem(
-    title: 'Urban cycling commute',
-    tag: 'mobility',
-    imageUrl:
-        'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=600&q=80',
-  ),
-  _GalleryItem(
-    title: 'Rainwater collection',
-    tag: 'water',
-    imageUrl:
-        'https://images.unsplash.com/photo-1620626011761-996317702782?w=600&q=80',
-  ),
-  _GalleryItem(
-    title: 'Community compost hub',
-    tag: 'food',
-    imageUrl:
-        'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=600&q=80',
-  ),
-  _GalleryItem(
-    title: 'Native wildflower meadow',
-    tag: 'nature',
-    imageUrl:
-        'https://images.unsplash.com/photo-1441974231531-c6227db76b6e?w=600&q=80',
-  ),
-  _GalleryItem(
-    title: 'Reusable market haul',
-    tag: 'products',
-    imageUrl:
-        'https://images.unsplash.com/photo-1591195853828-11ad59a44f6b?w=600&q=80',
-  ),
-  _GalleryItem(
-    title: 'Wind farm at dusk',
-    tag: 'energy',
-    imageUrl:
-        'https://images.unsplash.com/photo-1466611653911-950815379e6b?w=600&q=80',
-  ),
-  _GalleryItem(
-    title: 'Bamboo utensil set',
-    tag: 'products',
-    imageUrl:
-        'https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=600&q=80',
-  ),
-  _GalleryItem(
-    title: 'Forest trail stewardship',
-    tag: 'nature',
-    imageUrl:
-        'https://images.unsplash.com/photo-1448375240586-882707db888b?w=600&q=80',
-  ),
-];
 
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key});
@@ -88,13 +26,59 @@ class GalleryScreen extends StatefulWidget {
 class _GalleryScreenState extends State<GalleryScreen> {
   final _searchController = TextEditingController();
   String _query = '';
+  late Future<List<_GalleryItem>> _galleryFuture;
+
+  static const _fallbackTags = [
+    'energy',
+    'home',
+    'mobility',
+    'water',
+    'food',
+    'nature',
+    'products',
+    'energy',
+    'products',
+    'nature',
+  ];
+
+  static const _fallbackTitles = [
+    'Solar inspiration',
+    'Sustainable home',
+    'Green commute',
+    'Water wisdom',
+    'Fresh harvest',
+    'Wild nature',
+    'Eco products',
+    'Clean energy',
+    'Reusable living',
+    'Forest paths',
+  ];
 
   @override
   void initState() {
     super.initState();
+    FirestoreService.instance.seedGallery();
+    _galleryFuture = _loadGallery();
     _searchController.addListener(() {
       setState(() => _query = _searchController.text.trim().toLowerCase());
     });
+  }
+
+  Future<List<_GalleryItem>> _loadGallery() async {
+    final urls = await FirestoreService.instance.getGalleryImages();
+    return List.generate(urls.length, (index) {
+      return _GalleryItem(
+        imageUrl: urls[index],
+        title: index < _fallbackTitles.length
+            ? _fallbackTitles[index]
+            : 'Eco inspiration ${index + 1}',
+        tag: index < _fallbackTags.length ? _fallbackTags[index] : 'nature',
+      );
+    });
+  }
+
+  void _reloadGallery() {
+    setState(() => _galleryFuture = _loadGallery());
   }
 
   @override
@@ -103,9 +87,9 @@ class _GalleryScreenState extends State<GalleryScreen> {
     super.dispose();
   }
 
-  List<_GalleryItem> get _filtered {
-    if (_query.isEmpty) return _kGalleryItems;
-    return _kGalleryItems.where((item) {
+  List<_GalleryItem> _filter(List<_GalleryItem> items) {
+    if (_query.isEmpty) return items;
+    return items.where((item) {
       return item.title.toLowerCase().contains(_query) ||
           item.tag.toLowerCase().contains(_query);
     }).toList();
@@ -113,8 +97,6 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final items = _filtered;
-
     return Scaffold(
       backgroundColor: EcoColors.background,
       appBar: AppBar(
@@ -172,8 +154,49 @@ class _GalleryScreenState extends State<GalleryScreen> {
               ),
             ),
             Expanded(
-              child: items.isEmpty
-                  ? Center(
+              child: FutureBuilder<List<_GalleryItem>>(
+                future: _galleryFuture,
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(
+                        color: EcoColors.primary,
+                      ),
+                    );
+                  }
+
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              'Could not load gallery',
+                              style: GoogleFonts.inter(
+                                fontWeight: FontWeight.w600,
+                                color: EcoColors.onSurface,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            FilledButton(
+                              onPressed: _reloadGallery,
+                              style: FilledButton.styleFrom(
+                                backgroundColor: EcoColors.primary,
+                              ),
+                              child: const Text('Retry'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+
+                  final items = _filter(snapshot.data ?? []);
+
+                  if (items.isEmpty) {
+                    return Center(
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Column(
@@ -196,21 +219,25 @@ class _GalleryScreenState extends State<GalleryScreen> {
                           ],
                         ),
                       ),
-                    )
-                  : GridView.builder(
-                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        crossAxisSpacing: 12,
-                        mainAxisSpacing: 12,
-                        childAspectRatio: 0.82,
-                      ),
-                      itemCount: items.length,
-                      itemBuilder: (context, index) {
-                        return _GalleryTile(item: items[index]);
-                      },
+                    );
+                  }
+
+                  return GridView.builder(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                      childAspectRatio: 0.82,
                     ),
+                    itemCount: items.length,
+                    itemBuilder: (context, index) {
+                      return _GalleryTile(item: items[index]);
+                    },
+                  );
+                },
+              ),
             ),
           ],
         ),

@@ -6,10 +6,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 
 import '../auth_service.dart';
 import '../models/profile_state.dart';
+import '../services/notification_service.dart';
 import '../services/user_preferences.dart';
 import '../theme/app_theme.dart';
 import 'about_screen.dart';
 import 'achievement_detail_screen.dart';
+import 'achievements_screen.dart';
 import 'community_screen.dart';
 import 'contact_screen.dart';
 import 'edit_profile_screen.dart';
@@ -30,7 +32,24 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
-    // UserPreferences is already tracking local values, no need to sync Firebase since it's temporarily blocked.
+    _bootstrapNotifications();
+  }
+
+  Future<void> _bootstrapNotifications() async {
+    await NotificationService.instance.init();
+    if (UserPreferences.instance.notificationsEnabled.value) {
+      await NotificationService.instance.scheduleDailyReminder();
+    }
+  }
+
+  Future<void> _onNotificationsChanged(bool enabled) async {
+    await UserPreferences.instance.setNotificationsEnabled(enabled);
+    await NotificationService.instance.init();
+    if (enabled) {
+      await NotificationService.instance.scheduleDailyReminder();
+    } else {
+      await NotificationService.instance.cancelAllNotifications();
+    }
   }
 
   Future<void> _openEditProfile() async {
@@ -92,7 +111,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 notificationsOn: notificationsOn,
                 darkModeOn: _darkModeOn,
                 isSigningOut: _isSigningOut,
-                onNotificationsChanged: (v) => UserPreferences.instance.setNotificationsEnabled(v),
+                onNotificationsChanged: _onNotificationsChanged,
                 onDarkModeChanged: (v) => setState(() => _darkModeOn = v),
                 onSignOut: _signOut,
               );
@@ -129,6 +148,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _AchievementsSection(
             achievements: kAchievements,
             onTap: _openAchievement,
+            onViewAll: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => const AchievementsScreen(),
+                ),
+              );
+            },
           ),
         ],
         ),
@@ -701,10 +728,12 @@ class _SettingsToggleRow extends StatelessWidget {
 class _AchievementsSection extends StatelessWidget {
   final List<Achievement> achievements;
   final void Function(Achievement) onTap;
+  final VoidCallback onViewAll;
 
   const _AchievementsSection({
     required this.achievements,
     required this.onTap,
+    required this.onViewAll,
   });
 
   @override
@@ -712,13 +741,29 @@ class _AchievementsSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          'Achievements',
-          style: GoogleFonts.inter(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            color: EcoColors.onSurface,
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Achievements',
+              style: GoogleFonts.inter(
+                fontSize: 18,
+                fontWeight: FontWeight.w700,
+                color: EcoColors.onSurface,
+              ),
+            ),
+            TextButton(
+              onPressed: onViewAll,
+              child: Text(
+                'View all',
+                style: GoogleFonts.inter(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: EcoColors.primary,
+                ),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 12),
         Container(

@@ -3,8 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../database_service.dart';
 import '../models/progress_state.dart';
+import '../services/firestore_service.dart';
 import '../services/user_preferences.dart';
 import '../theme/app_theme.dart';
 import 'challenges_screen.dart';
@@ -25,44 +28,84 @@ class ProgressScreen extends StatelessWidget {
     final metrics = isEmpty ? emptyProgressMetrics : activeProgressMetrics;
     final weeklyHeights =
         isEmpty ? List.filled(7, 0.05) : activeWeeklyHeights;
+    final userId = FirebaseAuth.instance.currentUser?.uid;
 
-    return Scaffold(
-      backgroundColor: EcoColors.background,
-      appBar: const _ProgressAppBar(),
-      body: SafeArea(
+    Widget buildBody({
+      required int tasksCompleted,
+      required int currentStreak,
+      required Map<String, dynamic>? userData,
+    }) {
+      return SafeArea(
         child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        children: [
-          _ChallengesBanner(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => const ChallengesScreen(),
-                ),
-              );
-            },
-          ),
-          const SizedBox(height: 20),
-          _MetricsBento(
-            metrics: metrics,
-            onMetricTap: isEmpty
-                ? null
-                : (metric) => _openCategory(context, metric.type),
-          ),
-          const SizedBox(height: 24),
-          if (isEmpty)
-            _EmptyStateHero(onGoToDashboard: onGoToDashboard)
-          else
-            _ActiveOverview(weeklyHeights: weeklyHeights),
-          const SizedBox(height: 32),
-          _WeeklyActivitySection(
-            weeklyHeights: weeklyHeights,
-            highlightPeak: !isEmpty,
-          ),
-        ],
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          children: [
+            _ChallengesBanner(
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const ChallengesScreen(),
+                  ),
+                );
+              },
+            ),
+            const SizedBox(height: 20),
+            _ImpactCards(
+              userData: userData,
+              isEmpty: isEmpty,
+              onMetricTap: isEmpty
+                  ? null
+                  : (metric) => _openCategory(context, metric.type),
+            ),
+            const SizedBox(height: 24),
+            if (isEmpty)
+              _EmptyStateHero(onGoToDashboard: onGoToDashboard)
+            else
+              _ActiveOverview(
+                weeklyHeights: weeklyHeights,
+                tasksCompleted: tasksCompleted,
+                currentStreak: currentStreak,
+              ),
+            const SizedBox(height: 32),
+            _WeeklyActivitySection(
+              userId: userId,
+              weeklyHeights: weeklyHeights,
+              highlightPeak: !isEmpty,
+            ),
+          ],
         ),
-      ),
+      );
+    }
+
+    if (userId == null) {
+      return Scaffold(
+        backgroundColor: EcoColors.background,
+        appBar: const _ProgressAppBar(),
+        body: buildBody(tasksCompleted: 0, currentStreak: 0, userData: null),
+      );
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirestoreService.instance.getUserStream(userId),
+      builder: (context, snapshot) {
+        final tasksCompleted = FirestoreService.tasksCompletedFromSnapshot(
+          snapshot.data,
+        );
+        final cloudStreak = FirestoreService.currentStreakFromSnapshot(
+          snapshot.data,
+        );
+        final userData = snapshot.data?.data();
+
+        return Scaffold(
+          backgroundColor: EcoColors.background,
+          appBar: const _ProgressAppBar(),
+          body: buildBody(
+            tasksCompleted: tasksCompleted,
+            currentStreak: cloudStreak,
+            userData: userData,
+          ),
+        );
+      },
     );
   }
 
@@ -223,14 +266,58 @@ class _ProgressAppBar extends StatelessWidget implements PreferredSizeWidget {
   }
 }
 
-class _MetricsBento extends StatelessWidget {
-  final List<ProgressMetric> metrics;
+class _ImpactCards extends StatelessWidget {
+  final Map<String, dynamic>? userData;
+  final bool isEmpty;
   final void Function(ProgressMetric)? onMetricTap;
 
-  const _MetricsBento({required this.metrics, this.onMetricTap});
+  const _ImpactCards({
+    required this.userData,
+    required this.isEmpty,
+    this.onMetricTap,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final co2Saved = (userData?['co2Saved'] as num?)?.toDouble() ?? 0.0;
+    final waterSaved = (userData?['waterSaved'] as num?)?.toDouble() ?? 0.0;
+    final energySaved = (userData?['energySaved'] as num?)?.toDouble() ?? 0.0;
+
+    final impactMetrics = [
+      _ImpactMetric(
+        label: 'CO₂ Reduced',
+        value: '~${co2Saved.toStringAsFixed(1)} kg',
+        icon: Icons.cloud_rounded,
+        iconColor: EcoColors.primary,
+        type: ProgressCategoryType.co2,
+        isTappable: true,
+      ),
+      _ImpactMetric(
+        label: 'Water Saved',
+        value: '~${waterSaved.toStringAsFixed(1)} L',
+        icon: Icons.water_drop_rounded,
+        iconColor: Colors.blue,
+        type: ProgressCategoryType.water,
+        isTappable: true,
+      ),
+      _ImpactMetric(
+        label: 'Energy Saved',
+        value: '~${energySaved.toStringAsFixed(1)} kWh',
+        icon: Icons.bolt_rounded,
+        iconColor: Colors.amber,
+        type: ProgressCategoryType.energy,
+        isTappable: true,
+      ),
+      _ImpactMetric(
+        label: 'Tasks Done',
+        value: '${userData?['tasksCompleted'] ?? 0}',
+        icon: Icons.check_circle_rounded,
+        iconColor: EcoColors.secondary,
+        type: ProgressCategoryType.trees,
+        isTappable: false,
+      ),
+    ];
+
     return GridView.count(
       crossAxisCount: 2,
       shrinkWrap: true,
@@ -238,11 +325,18 @@ class _MetricsBento extends StatelessWidget {
       mainAxisSpacing: 12,
       crossAxisSpacing: 12,
       childAspectRatio: 1.05,
-      children: metrics.map((m) {
-        return _MetricCard(
+      children: impactMetrics.map((m) {
+        return _ImpactCard(
           metric: m,
-          onTap: m.isTappable && onMetricTap != null
-              ? () => onMetricTap!(m)
+          onTap: !isEmpty && m.isTappable && onMetricTap != null
+              ? () => onMetricTap!(ProgressMetric(
+                    type: m.type,
+                    label: m.label,
+                    value: m.value,
+                    icon: m.icon,
+                    iconColor: m.iconColor,
+                    isTappable: true,
+                  ))
               : null,
         );
       }).toList(),
@@ -250,11 +344,29 @@ class _MetricsBento extends StatelessWidget {
   }
 }
 
-class _MetricCard extends StatelessWidget {
-  final ProgressMetric metric;
+class _ImpactMetric {
+  final String label;
+  final String value;
+  final IconData icon;
+  final Color iconColor;
+  final ProgressCategoryType type;
+  final bool isTappable;
+
+  _ImpactMetric({
+    required this.label,
+    required this.value,
+    required this.icon,
+    required this.iconColor,
+    required this.type,
+    this.isTappable = false,
+  });
+}
+
+class _ImpactCard extends StatelessWidget {
+  final _ImpactMetric metric;
   final VoidCallback? onTap;
 
-  const _MetricCard({required this.metric, this.onTap});
+  const _ImpactCard({required this.metric, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -453,8 +565,14 @@ class _EmptyStateHero extends StatelessWidget {
 
 class _ActiveOverview extends StatelessWidget {
   final List<double> weeklyHeights;
+  final int tasksCompleted;
+  final int currentStreak;
 
-  const _ActiveOverview({required this.weeklyHeights});
+  const _ActiveOverview({
+    required this.weeklyHeights,
+    required this.tasksCompleted,
+    required this.currentStreak,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -488,41 +606,18 @@ class _ActiveOverview extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 16),
-          FutureBuilder<List<int>>(
-            future: Future.wait([
-              DatabaseService.instance.getTasksCompleted(FirebaseAuth.instance.currentUser?.uid ?? ''),
-              DatabaseService.instance.getCurrentStreak(FirebaseAuth.instance.currentUser?.uid ?? ''),
-            ]),
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.waiting) {
-                return const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(8.0),
-                    child: SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: EcoColors.primary),
-                    ),
-                  ),
-                );
-              }
-              final int tasksCompleted = snapshot.data?[0] ?? 0;
-              final int currentStreak = snapshot.data?[1] ?? 0;
-
-              return Row(
-                children: [
-                  _OverviewChip(
-                    icon: Icons.local_fire_department_rounded,
-                    label: 'Current Streak: $currentStreak',
-                  ),
-                  const SizedBox(width: 10),
-                  _OverviewChip(
-                    icon: Icons.check_circle_rounded,
-                    label: 'Tasks Completed: $tasksCompleted',
-                  ),
-                ],
-              );
-            },
+          Row(
+            children: [
+              _OverviewChip(
+                icon: Icons.local_fire_department_rounded,
+                label: 'Current Streak: $currentStreak',
+              ),
+              const SizedBox(width: 10),
+              _OverviewChip(
+                icon: Icons.check_circle_rounded,
+                label: 'Tasks Completed: $tasksCompleted',
+              ),
+            ],
           ),
         ],
       ),
@@ -569,10 +664,90 @@ class _OverviewChip extends StatelessWidget {
 }
 
 class _WeeklyActivitySection extends StatelessWidget {
+  final String? userId;
   final List<double> weeklyHeights;
   final bool highlightPeak;
 
   const _WeeklyActivitySection({
+    required this.userId,
+    required this.weeklyHeights,
+    required this.highlightPeak,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (userId == null) {
+      return _WeeklyActivityPlaceholder(
+        weeklyHeights: weeklyHeights,
+        highlightPeak: highlightPeak,
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Weekly Activity',
+          style: GoogleFonts.inter(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            color: EcoColors.onSurface,
+          ),
+        ),
+        const SizedBox(height: 14),
+        FutureBuilder<List<int>>(
+          future: DatabaseService.instance.getWeeklyActivity(userId!),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return _WeeklyActivityPlaceholder(
+                weeklyHeights: weeklyHeights,
+                highlightPeak: highlightPeak,
+              );
+            }
+
+            if (snapshot.hasError) {
+              return _WeeklyActivityPlaceholder(
+                weeklyHeights: weeklyHeights,
+                highlightPeak: highlightPeak,
+              );
+            }
+
+            final weeklyActivity = snapshot.data ?? List.filled(7, 0);
+            final dayLabels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+            return Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: EcoColors.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: EcoColors.outlineVariant.withValues(alpha: 0.3),
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: List.generate(7, (index) {
+                  final status = weeklyActivity[index];
+                  final dayLabel = dayLabels[index];
+                  return _DayStatusIndicator(
+                    status: status,
+                    dayLabel: dayLabel,
+                  );
+                }),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+}
+
+class _WeeklyActivityPlaceholder extends StatelessWidget {
+  final List<double> weeklyHeights;
+  final bool highlightPeak;
+
+  const _WeeklyActivityPlaceholder({
     required this.weeklyHeights,
     required this.highlightPeak,
   });
@@ -666,6 +841,69 @@ class _WeeklyActivitySection extends StatelessWidget {
                     .toList(),
               ),
             ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _DayStatusIndicator extends StatelessWidget {
+  final int status;
+  final String dayLabel;
+
+  const _DayStatusIndicator({
+    required this.status,
+    required this.dayLabel,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    IconData icon;
+    Color iconColor;
+    Color bgColor;
+
+    switch (status) {
+      case 1: // Completed
+        icon = Icons.check_circle_rounded;
+        iconColor = EcoColors.primary;
+        bgColor = EcoColors.primaryFixed.withValues(alpha: 0.2);
+        break;
+      case 0: // Missed
+        icon = Icons.close_rounded;
+        iconColor = EcoColors.outline;
+        bgColor = EcoColors.surfaceContainer;
+        break;
+      case -1: // Future
+      default:
+        icon = Icons.remove_rounded;
+        iconColor = EcoColors.outline.withValues(alpha: 0.5);
+        bgColor = EcoColors.surfaceContainerLow;
+        break;
+    }
+
+    return Column(
+      children: [
+        Container(
+          width: 40,
+          height: 40,
+          decoration: BoxDecoration(
+            color: bgColor,
+            shape: BoxShape.circle,
+          ),
+          child: Icon(
+            icon,
+            color: iconColor,
+            size: 24,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          dayLabel,
+          style: GoogleFonts.publicSans(
+            fontSize: 11,
+            fontWeight: FontWeight.w600,
+            color: EcoColors.onSurfaceVariant,
           ),
         ),
       ],

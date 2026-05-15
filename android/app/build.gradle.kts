@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     id("com.android.application")
     // START: FlutterFire Configuration
@@ -14,6 +16,7 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -45,3 +48,30 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
+}
+
+// #region agent log
+tasks.configureEach {
+    if (name != "mergeDebugResources") return@configureEach
+    doFirst {
+        try {
+            val flutterRoot = rootProject.projectDir.parentFile ?: return@doFirst
+            val logFile = File(flutterRoot, "debug-2b2511.log")
+            val mergeDir =
+                layout.buildDirectory.get().asFile.resolve(
+                    "intermediates/incremental/debug/mergeDebugResources",
+                )
+            val existsBefore = mergeDir.exists()
+            val childCountApprox = mergeDir.listFiles()?.size ?: -1
+            val bh = mergeDir.absolutePath.hashCode()
+            val line =
+                """{"sessionId":"2b2511","timestamp":${System.currentTimeMillis()},"hypothesisId":"E","location":"app/build.gradle.kts:mergeDebugResources","message":"task_doFirst","data":{"existsBefore":$existsBefore,"childCountApprox":$childCountApprox,"mergeDirPathHash":$bh}}""" +
+                    "\n"
+            logFile.appendText(line)
+        } catch (_: Exception) {}
+    }
+}
+// #endregion agent log

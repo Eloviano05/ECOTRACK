@@ -2,6 +2,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:google_sign_in/google_sign_in.dart';
 
+import 'services/firestore_service.dart';
 import 'services/user_preferences.dart';
 
 class AuthService {
@@ -15,6 +16,7 @@ class AuthService {
     _auth.authStateChanges().listen((User? user) async {
       if (user != null) {
         await UserPreferences.instance.syncWithFirebase(user);
+        await FirestoreService.instance.syncUserDocument(user);
       }
     });
   }
@@ -24,6 +26,7 @@ class AuthService {
       final user = _auth.currentUser;
       if (user != null) {
         await UserPreferences.instance.syncWithFirebase(user);
+        await FirestoreService.instance.syncUserDocument(user);
       }
     });
   }
@@ -45,6 +48,9 @@ class AuthService {
 
       final cred = await _auth.signInWithCredential(credential);
       await UserPreferences.instance.syncWithFirebase(cred.user);
+      if (cred.user != null) {
+        await FirestoreService.instance.syncUserDocument(cred.user!);
+      }
       return cred;
     } catch (e) {
       debugPrint('An unexpected error occurred during Google Sign In: $e');
@@ -59,6 +65,9 @@ class AuthService {
         password: password,
       );
       await UserPreferences.instance.syncWithFirebase(userCredential.user);
+      if (userCredential.user != null) {
+        await FirestoreService.instance.syncUserDocument(userCredential.user!);
+      }
       return userCredential;
     } on FirebaseAuthException catch (e) {
       _handleAuthError(e);
@@ -76,6 +85,9 @@ class AuthService {
         password: password,
       );
       await UserPreferences.instance.syncWithFirebase(userCredential.user);
+      if (userCredential.user != null) {
+        await FirestoreService.instance.syncUserDocument(userCredential.user!);
+      }
       return userCredential;
     } on FirebaseAuthException catch (e) {
       _handleAuthError(e);

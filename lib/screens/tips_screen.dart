@@ -1,12 +1,14 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../services/firestore_service.dart';
 import '../models/eco_tip.dart';
 import '../theme/app_theme.dart';
+import 'bookmarks_screen.dart';
 import 'meal_plan_screen.dart';
 import 'tip_detail_screen.dart';
-import 'tips_search_screen.dart';
 
 /// UI filter chip → Firestore `category` field (or `all` for no filter).
 class _ContentFilter {
@@ -33,12 +35,18 @@ class TipsScreen extends StatefulWidget {
 
 class _TipsScreenState extends State<TipsScreen> {
   String _selectedCategory = 'all';
+  String _searchQuery = '';
+  bool _sortAscending = true;
   late Future<List<Map<String, dynamic>>> _contentFuture;
 
   @override
   void initState() {
     super.initState();
     FirestoreService.instance.seedFirestoreData();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      FirestoreService.instance.syncUserDocument(user);
+    }
     _reloadContent();
   }
 
@@ -55,17 +63,94 @@ class _TipsScreenState extends State<TipsScreen> {
     _reloadContent();
   }
 
+  void _toggleSort() {
+    setState(() => _sortAscending = !_sortAscending);
+  }
+
+  List<Map<String, dynamic>> _filterAndSortItems(List<Map<String, dynamic>> items) {
+    var filtered = items.where((item) {
+      final title = (item['title'] as String? ?? '').toLowerCase();
+      final summary = (item['summary'] as String? ?? '').toLowerCase();
+      final query = _searchQuery.toLowerCase();
+      return title.contains(query) || summary.contains(query);
+    }).toList();
+
+    filtered.sort((a, b) {
+      final titleA = (a['title'] as String? ?? '').toLowerCase();
+      final titleB = (b['title'] as String? ?? '').toLowerCase();
+      return _sortAscending ? titleA.compareTo(titleB) : titleB.compareTo(titleA);
+    });
+
+    return filtered;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: EcoColors.background,
-      appBar: _TipsAppBar(onSearchTap: _openSearch),
-      body: SafeArea(
-        child: Column(
-          children: [
+    final userId = FirebaseAuth.instance.currentUser?.uid;
+
+    if (userId == null) {
+      return Scaffold(
+        backgroundColor: EcoColors.background,
+        appBar: _TipsAppBar(
+          onBookmarkTap: () {},
+          onSortTap: () {},
+        ),
+        body: const SafeArea(
+          child: Center(
+            child: Text('Sign in to save tips and sync your library.'),
+          ),
+        ),
+      );
+    }
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirestoreService.instance.getUserStream(userId),
+      builder: (context, userSnapshot) {
+        final savedTips = FirestoreService.savedTipsFromSnapshot(
+          userSnapshot.data,
+        );
+
+        return Scaffold(
+          backgroundColor: EcoColors.background,
+          appBar: _TipsAppBar(
+            onBookmarkTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const BookmarksScreen()),
+              );
+            },
+            onSortTap: _toggleSort,
+          ),
+          body: SafeArea(
+            child: Column(
+              children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-              child: _SearchBarTile(onTap: _openSearch),
+              child: TextField(
+                onChanged: (value) => setState(() => _searchQuery = value),
+                decoration: InputDecoration(
+                  hintText: 'Search tips...',
+                  hintStyle: GoogleFonts.inter(
+                    color: EcoColors.outline,
+                    fontSize: 15,
+                  ),
+                  filled: true,
+                  fillColor: EcoColors.surfaceContainerHigh,
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(999),
+                    borderSide: BorderSide.none,
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 14,
+                  ),
+                  prefixIcon: const Icon(
+                    Icons.search_rounded,
+                    color: EcoColors.onSurfaceVariant,
+                    size: 22,
+                  ),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             SizedBox(
@@ -188,27 +273,40 @@ class _TipsScreenState extends State<TipsScreen> {
                   }
 
                   final items = snapshot.data ?? [];
-                  if (items.isEmpty) {
+                  final filteredItems = _filterAndSortItems(items);
+                  
+                  if (filteredItems.isEmpty) {
                     return _ContentMessage(
                       icon: Icons.eco_outlined,
-                      title: 'No tips here yet',
-                      subtitle:
-                          'We are growing our library. Try another category or pull to refresh in a moment.',
-                      actionLabel: 'Refresh',
-                      onAction: _reloadContent,
+                      title: items.isEmpty ? 'No tips here yet' : 'No results found',
+                      subtitle: items.isEmpty
+                          ? 'We are growing our library. Try another category or pull to refresh in a moment.'
+                          : 'Try adjusting your search or filter criteria.',
+                      actionLabel: items.isEmpty ? 'Refresh' : 'Clear search',
+                      onAction: items.isEmpty ? _reloadContent : () => setState(() => _searchQuery = ''),
                     );
                   }
 
                   return ListView.separated(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                    itemCount: items.length,
+                    itemCount: filteredItems.length,
                     separatorBuilder: (_, _) => const SizedBox(height: 12),
                     itemBuilder: (_, index) {
-                      final item = items[index];
+                      final item = filteredItems[index];
+                      final tipId = item['id'] as String? ?? '';
+                      final isSaved = savedTips.contains(tipId);
                       return _ContentCard(
                         title: item['title'] as String? ?? 'Untitled',
                         summary: item['summary'] as String? ?? '',
                         category: item['category'] as String? ?? '',
+                        isSaved: isSaved,
+                        onBookmark: () {
+                          FirestoreService.instance.toggleSaveTip(
+                            userId,
+                            tipId,
+                            !isSaved,
+                          );
+                        },
                         onTap: () => _openDetail(item),
                       );
                     },
@@ -216,16 +314,11 @@ class _TipsScreenState extends State<TipsScreen> {
                 },
               ),
             ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _openSearch() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const TipsSearchScreen()),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -361,12 +454,16 @@ class _ContentCard extends StatelessWidget {
     required this.title,
     required this.summary,
     required this.category,
+    required this.isSaved,
+    required this.onBookmark,
     required this.onTap,
   });
 
   final String title;
   final String summary;
   final String category;
+  final bool isSaved;
+  final VoidCallback onBookmark;
   final VoidCallback onTap;
 
   @override
@@ -427,7 +524,14 @@ class _ContentCard extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 8),
+            IconButton(
+              onPressed: onBookmark,
+              icon: Icon(
+                isSaved ? Icons.bookmark : Icons.bookmark_border,
+                color: isSaved ? EcoColors.primary : EcoColors.onSurfaceVariant,
+              ),
+              tooltip: isSaved ? 'Remove from saved' : 'Save tip',
+            ),
             const Icon(
               Icons.chevron_right_rounded,
               color: EcoColors.outlineVariant,
@@ -485,8 +589,9 @@ class _ContentCard extends StatelessWidget {
 // AppBar
 // ─────────────────────────────────────────────────────────
 class _TipsAppBar extends StatelessWidget implements PreferredSizeWidget {
-  final VoidCallback onSearchTap;
-  const _TipsAppBar({required this.onSearchTap});
+  final VoidCallback onBookmarkTap;
+  final VoidCallback onSortTap;
+  const _TipsAppBar({required this.onBookmarkTap, required this.onSortTap});
 
   @override
   Size get preferredSize => const Size.fromHeight(56);
@@ -497,11 +602,6 @@ class _TipsAppBar extends StatelessWidget implements PreferredSizeWidget {
       backgroundColor: EcoColors.surface,
       elevation: 0,
       automaticallyImplyLeading: false,
-      leadingWidth: 56,
-      leading: IconButton(
-        onPressed: onSearchTap,
-        icon: const Icon(Icons.search_rounded, color: EcoColors.onSurfaceVariant),
-      ),
       title: Text(
         'EcoTrack',
         style: GoogleFonts.inter(
@@ -513,45 +613,18 @@ class _TipsAppBar extends StatelessWidget implements PreferredSizeWidget {
       centerTitle: true,
       actions: [
         IconButton(
-          onPressed: () {},
-          icon: const Icon(Icons.filter_list_rounded,
+          onPressed: onSortTap,
+          icon: const Icon(Icons.sort_rounded,
               color: EcoColors.onSurfaceVariant),
+          tooltip: 'Sort',
+        ),
+        IconButton(
+          onPressed: onBookmarkTap,
+          icon: const Icon(Icons.bookmark_rounded,
+              color: EcoColors.onSurfaceVariant),
+          tooltip: 'Saved Tips',
         ),
       ],
-    );
-  }
-}
-
-class _SearchBarTile extends StatelessWidget {
-  final VoidCallback onTap;
-  const _SearchBarTile({required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        height: 52,
-        decoration: BoxDecoration(
-          color: EcoColors.surfaceContainerHigh,
-          borderRadius: BorderRadius.circular(999),
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        child: Row(
-          children: [
-            const Icon(Icons.search_rounded,
-                color: EcoColors.onSurfaceVariant, size: 22),
-            const SizedBox(width: 10),
-            Text(
-              'Search tips...',
-              style: GoogleFonts.inter(
-                color: EcoColors.outline,
-                fontSize: 15,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

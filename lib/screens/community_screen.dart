@@ -1,6 +1,9 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../services/firestore_service.dart';
+import '../services/user_preferences.dart';
 import '../theme/app_theme.dart';
 
 class CommunityScreen extends StatefulWidget {
@@ -12,22 +15,12 @@ class CommunityScreen extends StatefulWidget {
 
 class _CommunityScreenState extends State<CommunityScreen> {
   final _storyController = TextEditingController();
-  final List<_SuccessStory> _stories = List.of(_seedStories);
+  bool _isPosting = false;
 
   @override
   void dispose() {
     _storyController.dispose();
     super.dispose();
-  }
-
-  void _toggleLike(int index) {
-    setState(() {
-      final story = _stories[index];
-      _stories[index] = story.copyWith(
-        liked: !story.liked,
-        likeCount: story.liked ? story.likeCount - 1 : story.likeCount + 1,
-      );
-    });
   }
 
   void _openShareSheet() {
@@ -112,20 +105,33 @@ class _CommunityScreenState extends State<CommunityScreen> {
                 ),
                 const SizedBox(height: 16),
                 ElevatedButton(
-                  onPressed: () => _submitStory(sheetContext),
+                  onPressed: _isPosting
+                      ? null
+                      : () => _submitStory(sheetContext),
                   style: ElevatedButton.styleFrom(
+                    backgroundColor: EcoColors.primary,
+                    foregroundColor: EcoColors.onPrimary,
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: Text(
-                    'Post',
-                    style: GoogleFonts.inter(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
-                    ),
-                  ),
+                  child: _isPosting
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: EcoColors.onPrimary,
+                          ),
+                        )
+                      : Text(
+                          'Post',
+                          style: GoogleFonts.inter(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 15,
+                          ),
+                        ),
                 ),
               ],
             ),
@@ -135,47 +141,70 @@ class _CommunityScreenState extends State<CommunityScreen> {
     );
   }
 
-  void _submitStory(BuildContext sheetContext) {
+  Future<void> _submitStory(BuildContext sheetContext) async {
     final text = _storyController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isPosting) return;
 
-    Navigator.pop(sheetContext);
-    setState(() {
-      _stories.insert(
-        0,
-        _SuccessStory(
-          username: 'You',
-          timestamp: 'Just now',
-          message: text,
-          likeCount: 0,
-          liked: false,
+    setState(() => _isPosting = true);
+
+    try {
+      final userName = UserPreferences.instance.userName.value.trim();
+      await FirestoreService.instance.addCommunityPost(
+        userName.isNotEmpty ? userName : 'Eco-Warrior',
+        text,
+      );
+
+      if (!sheetContext.mounted) return;
+      Navigator.pop(sheetContext);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.eco_rounded, color: Colors.white),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Your story has been shared with the community!',
+                  style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: EcoColors.primary,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          duration: const Duration(seconds: 3),
         ),
       );
-    });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not post story: $e'),
+            backgroundColor: EcoColors.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isPosting = false);
+    }
+  }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: [
-            const Icon(Icons.eco_rounded, color: Colors.white),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                'Your story has been shared with the community!',
-                style: GoogleFonts.inter(fontWeight: FontWeight.w600),
-              ),
-            ),
-          ],
-        ),
-        backgroundColor: EcoColors.primary,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        duration: const Duration(seconds: 3),
-      ),
-    );
+  static String _formatTimestamp(dynamic timestamp) {
+    if (timestamp is! Timestamp) return '';
+    final date = timestamp.toDate();
+    final diff = DateTime.now().difference(date);
+
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+    if (diff.inHours < 24) return '${diff.inHours}h ago';
+    if (diff.inDays == 1) return 'Yesterday';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    return '${date.month}/${date.day}/${date.year}';
   }
 
   @override
@@ -201,15 +230,78 @@ class _CommunityScreenState extends State<CommunityScreen> {
         centerTitle: true,
       ),
       body: SafeArea(
-        child: ListView.separated(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 88),
-          itemCount: _stories.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 12),
-          itemBuilder: (context, index) {
-            final story = _stories[index];
-            return _StoryCard(
-              story: story,
-              onLike: () => _toggleLike(index),
+        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirestoreService.instance.getCommunityPosts(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(
+                child: CircularProgressIndicator(color: EcoColors.primary),
+              );
+            }
+
+            if (snapshot.hasError) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Text(
+                    'Could not load community posts.',
+                    style: GoogleFonts.inter(color: EcoColors.onSurfaceVariant),
+                  ),
+                ),
+              );
+            }
+
+            final docs = snapshot.data?.docs ?? [];
+
+            if (docs.isEmpty) {
+              return Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(
+                        Icons.forum_outlined,
+                        size: 48,
+                        color: EcoColors.onSurfaceVariant,
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'No stories yet',
+                        style: GoogleFonts.inter(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                          color: EcoColors.onSurface,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Be the first to share your eco journey!',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(
+                          fontSize: 14,
+                          color: EcoColors.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }
+
+            return ListView.separated(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 88),
+              itemCount: docs.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 12),
+              itemBuilder: (context, index) {
+                final data = docs[index].data();
+                return _StoryCard(
+                  username: data['userName'] as String? ?? 'Anonymous',
+                  timestamp: _formatTimestamp(data['timestamp']),
+                  message: data['message'] as String? ?? '',
+                  likeCount: (data['likeCount'] as num?)?.toInt() ?? 0,
+                );
+              },
             );
           },
         ),
@@ -220,80 +312,25 @@ class _CommunityScreenState extends State<CommunityScreen> {
         foregroundColor: EcoColors.onPrimary,
         elevation: 4,
         shape: const CircleBorder(),
+        tooltip: 'Share Story',
         child: const Icon(Icons.edit_rounded),
       ),
     );
   }
 }
 
-class _SuccessStory {
+class _StoryCard extends StatelessWidget {
+  const _StoryCard({
+    required this.username,
+    required this.timestamp,
+    required this.message,
+    required this.likeCount,
+  });
+
   final String username;
   final String timestamp;
   final String message;
   final int likeCount;
-  final bool liked;
-
-  const _SuccessStory({
-    required this.username,
-    required this.timestamp,
-    required this.message,
-    this.likeCount = 0,
-    this.liked = false,
-  });
-
-  _SuccessStory copyWith({
-    String? username,
-    String? timestamp,
-    String? message,
-    int? likeCount,
-    bool? liked,
-  }) {
-    return _SuccessStory(
-      username: username ?? this.username,
-      timestamp: timestamp ?? this.timestamp,
-      message: message ?? this.message,
-      likeCount: likeCount ?? this.likeCount,
-      liked: liked ?? this.liked,
-    );
-  }
-}
-
-const _seedStories = [
-  _SuccessStory(
-    username: 'Sarah M.',
-    timestamp: '2 hours ago',
-    message: 'Just finished my first zero-waste week! 🌍',
-    likeCount: 24,
-  ),
-  _SuccessStory(
-    username: 'Alex K.',
-    timestamp: '5 hours ago',
-    message: 'Biked to work every day this month — feeling great and saving CO₂!',
-    likeCount: 18,
-    liked: true,
-  ),
-  _SuccessStory(
-    username: 'Jordan L.',
-    timestamp: 'Yesterday',
-    message: 'Swapped all our bulbs to LED. Electric bill dropped and the house looks warmer. 💡',
-    likeCount: 31,
-  ),
-  _SuccessStory(
-    username: 'Maya P.',
-    timestamp: '2 days ago',
-    message: 'Started composting kitchen scraps. Our garden has never been happier!',
-    likeCount: 42,
-  ),
-];
-
-class _StoryCard extends StatelessWidget {
-  final _SuccessStory story;
-  final VoidCallback onLike;
-
-  const _StoryCard({
-    required this.story,
-    required this.onLike,
-  });
 
   @override
   Widget build(BuildContext context) {
@@ -322,7 +359,7 @@ class _StoryCard extends StatelessWidget {
                 radius: 20,
                 backgroundColor: EcoColors.secondaryContainer,
                 child: Text(
-                  story.username.isNotEmpty ? story.username[0] : '?',
+                  username.isNotEmpty ? username[0].toUpperCase() : '?',
                   style: GoogleFonts.inter(
                     fontWeight: FontWeight.w700,
                     color: EcoColors.primary,
@@ -335,7 +372,7 @@ class _StoryCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      story.username,
+                      username,
                       style: GoogleFonts.inter(
                         fontSize: 14,
                         fontWeight: FontWeight.w700,
@@ -343,7 +380,7 @@ class _StoryCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      story.timestamp,
+                      timestamp,
                       style: GoogleFonts.inter(
                         fontSize: 12,
                         color: EcoColors.onSurfaceVariant,
@@ -356,43 +393,34 @@ class _StoryCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           Text(
-            story.message,
+            message,
             style: GoogleFonts.inter(
               fontSize: 15,
               height: 1.45,
               color: EcoColors.onSurface,
             ),
           ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              IconButton(
-                onPressed: onLike,
-                icon: Icon(
-                  story.liked
-                      ? Icons.favorite_rounded
-                      : Icons.favorite_border_rounded,
-                  color: story.liked
-                      ? EcoColors.tertiary
-                      : EcoColors.onSurfaceVariant,
-                  size: 22,
+          if (likeCount > 0) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(
+                  Icons.favorite_rounded,
+                  color: EcoColors.tertiary,
+                  size: 18,
                 ),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(
-                  minWidth: 36,
-                  minHeight: 36,
+                const SizedBox(width: 6),
+                Text(
+                  '$likeCount',
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: EcoColors.onSurfaceVariant,
+                  ),
                 ),
-              ),
-              Text(
-                '${story.likeCount}',
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  color: EcoColors.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
+              ],
+            ),
+          ],
         ],
       ),
     );
