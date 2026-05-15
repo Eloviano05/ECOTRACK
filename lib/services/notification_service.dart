@@ -37,6 +37,10 @@ class NotificationService {
         iOS: darwinSettings,
         macOS: darwinSettings,
       ),
+      onDidReceiveNotificationResponse: (NotificationResponse response) {
+        // This callback is triggered when the notification is tapped
+        debugPrint('[NotificationService] Notification tapped: ${response.payload}');
+      },
     );
 
     final androidPlugin =
@@ -45,6 +49,30 @@ class NotificationService {
     await androidPlugin?.requestNotificationsPermission();
 
     _initialized = true;
+  }
+
+  Future<void> showTestNotification() async {
+    await init();
+    const details = NotificationDetails(
+      android: AndroidNotificationDetails(
+        'test_channel',
+        'Test Notifications',
+        channelDescription: 'Used for testing notifications',
+        importance: Importance.max,
+        priority: Priority.high,
+        icon: '@mipmap/ic_launcher',
+      ),
+      iOS: DarwinNotificationDetails(),
+      macOS: DarwinNotificationDetails(),
+    );
+
+    await _plugin.show(
+      id: 999,
+      title: 'EcoTrack Alert',
+      body: 'This is a test of your local notification system!',
+      notificationDetails: details,
+      payload: 'test_payload',
+    );
   }
 
   Future<void> scheduleDailyReminder() async {

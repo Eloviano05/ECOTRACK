@@ -10,10 +10,12 @@ import '../widgets/eco_app_bar.dart';
 import '../widgets/empty_state_body.dart';
 import '../widgets/home_hub_section.dart';
 import '../services/user_preferences.dart';
+import '../services/firestore_service.dart';
 import '../database_service.dart';
+import 'notifications_screen.dart';
 
 /// Home tab: live dashboard (empty or active) plus module hub for rubric navigation.
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({
     super.key,
     required this.state,
@@ -30,6 +32,17 @@ class HomeScreen extends StatelessWidget {
   final VoidCallback? onDismissCelebration;
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    FirestoreService.instance.seedProductionData();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return ValueListenableBuilder<String>(
       valueListenable: UserPreferences.instance.userName,
@@ -42,8 +55,8 @@ class HomeScreen extends StatelessWidget {
                 : 'Eco-Warrior';
 
             final hour = DateTime.now().hour;
-            final greeting = (hour < 12) 
-                ? 'Good morning' 
+            final greeting = (hour < 12)
+                ? 'Good morning'
                 : (hour < 17) ? 'Good afternoon' : 'Good evening';
 
             return Scaffold(
@@ -56,7 +69,7 @@ class HomeScreen extends StatelessWidget {
                 titleSpacing: 16,
                 title: Row(
                   children: [
-                    if (!state.isFirstTime)
+                    if (!widget.state.isFirstTime)
                       Container(
                         width: 40,
                         height: 40,
@@ -98,8 +111,15 @@ class HomeScreen extends StatelessWidget {
                 ),
                 actions: [
                   IconButton(
-                    onPressed: () {},
-                    icon: const Icon(Icons.notifications_outlined, color: EcoColors.primary),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const NotificationsScreen(),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.notifications_none, color: EcoColors.primary),
                     padding: const EdgeInsets.all(8),
                   ),
                   const SizedBox(width: 4),
@@ -112,13 +132,13 @@ class HomeScreen extends StatelessWidget {
                   switchInCurve: Curves.easeOut,
                   switchOutCurve: Curves.easeIn,
                   child: ListView(
-                    key: ValueKey<bool>(state.isFirstTime),
+                    key: ValueKey<bool>(widget.state.isFirstTime),
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
                     children: [
-                      if (state.isFirstTime)
+                      if (widget.state.isFirstTime)
                         EmptyStateBody(
-                          onCompleteAction: onCompleteAction,
-                          isLoading: isSaving,
+                          onCompleteAction: widget.onCompleteAction,
+                          isLoading: widget.isSaving,
                           embedInParentScroll: true,
                         )
                       else ...[
@@ -149,11 +169,11 @@ class HomeScreen extends StatelessWidget {
                                 ),
                               );
                             }
-                            final int currentStreak = snapshot.data?[1] ?? state.dayStreak;
+                            final int currentStreak = snapshot.data?[1] ?? widget.state.dayStreak;
                             return ActiveStateBody(
-                              state: state.copyWith(userName: firstName, dayStreak: currentStreak),
-                              showCelebration: showCelebration,
-                              onDismissCelebration: onDismissCelebration,
+                              state: widget.state.copyWith(userName: firstName, dayStreak: currentStreak),
+                              showCelebration: widget.showCelebration,
+                              onDismissCelebration: widget.onDismissCelebration,
                               embedInParentScroll: true,
                             );
                           },

@@ -704,4 +704,53 @@ class FirestoreService {
       ],
     },
   ];
+
+  /// Master seeding function for production data.
+  /// Seeds recipes, challenges, and content collections if they are empty.
+  Future<void> seedProductionData() async {
+    // Recipes data
+    final List<Map<String, dynamic>> recipes = [
+      {"title": "One-Pot Lentil Bolognese", "type": "vegan_main", "ingredients": ["1 cup brown lentils", "1 onion, diced", "2 carrots, diced", "2 celery stalks, diced", "3 cloves garlic, minced", "1 can crushed tomatoes", "2 tbsp tomato paste", "1 tsp dried oregano", "500ml vegetable broth", "Salt and pepper to taste"], "carbon_per_serving_kg": 0.4, "image_url": "https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=800", "instructions": "Sauté onion, carrots, celery until soft. Add garlic, lentils, tomatoes, broth, and spices. Simmer 25 mins until lentils are tender. Serve over whole-grain pasta or zucchini noodles.", "tags": ["vegan", "low-carbon", "high-protein", "meal-prep"]},
+      {"title": "Coconut Chickpea Curry", "type": "curry", "ingredients": ["1 can chickpeas, drained", "1 can coconut milk", "1 onion, chopped", "2 tbsp curry powder", "1 tsp turmeric", "1 cup spinach", "1 cup cauliflower florets", "1 tbsp coconut oil", "Salt to taste"], "carbon_per_serving_kg": 0.6, "image_url": "https://images.unsplash.com/photo-1565557623262-b51c2513a641?auto=format&fit=crop&w=800", "instructions": "Heat oil, sauté onion until golden. Add spices, toast 1 min. Add chickpeas, cauliflower, coconut milk. Simmer 15 mins. Stir in spinach until wilted. Serve with brown rice.", "tags": ["vegetarian", "gluten-free", "anti-inflammatory", "quick-meal"]},
+      {"title": "Rainbow Quinoa Buddha Bowl", "type": "bowl", "ingredients": ["1 cup cooked quinoa", "1/2 cup roasted sweet potato", "1/2 cup chickpeas", "1/4 avocado, sliced", "1/4 cup shredded purple cabbage", "2 tbsp tahini", "1 tbsp lemon juice", "Handful of kale"], "carbon_per_serving_kg": 0.3, "image_url": "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=800", "instructions": "Arrange cooked quinoa, roasted sweet potato, chickpeas, cabbage, kale, and avocado in a bowl. Whisk tahini, lemon juice, and water for dressing. Drizzle and serve.", "tags": ["vegan", "nutrient-dense", "no-cook-option", "colorful"]}
+    ];
+
+    // Challenges data
+    final List<Map<String, dynamic>> challenges = [
+      {"id": "plastic_free_jan_2026", "title": "Plastic-Free January Challenge", "description": "Reduce single-use plastic waste for 30 days with daily actionable swaps.", "start_date": "2026-01-01", "end_date": "2026-01-31", "actions": ["Carry a reusable water bottle and coffee cup", "Use cloth produce bags for grocery shopping", "Choose package-free fruits and vegetables", "Refuse plastic straws and cutlery when ordering takeout"]},
+      {"id": "meatless_monday_q1", "title": "Meatless Monday Kickstart", "description": "Replace one meat-based meal per week with a plant-powered alternative to lower your carbon footprint.", "start_date": "2026-01-06", "end_date": "2026-03-31", "actions": ["Try one new vegetarian recipe each Monday", "Share your plant-based meal photo in the app community", "Calculate your weekly carbon savings using the in-app tracker", "Invite a friend to join your Meatless Monday"]},
+      {"id": "home_energy_sprint_feb", "title": "Home Energy Sprint", "description": "Cut household energy use by 15% in February through small, consistent habit changes.", "start_date": "2026-02-01", "end_date": "2026-02-28", "actions": ["Lower thermostat by 1°C and wear a sweater", "Switch to LED bulbs in high-use fixtures", "Unplug devices or use smart power strips at night", "Wash clothes in cold water and air-dry when possible"]}
+    ];
+
+    // Content data
+    final List<Map<String, dynamic>> content = [
+      {"title": "Decode Eco-Labels Like a Pro", "description": "Learn to identify trustworthy certifications like Energy Star, Fair Trade, and FSC to avoid greenwashing.", "category": "certifications", "impact_estimate": "Prevents ~50kg CO2e/year by steering purchases toward verified sustainable brands"},
+      {"title": "Switch to Community Solar", "description": "Join a local community solar program to access renewable energy without installing panels on your roof.", "category": "energy_tips", "impact_estimate": "Offsets ~1.2 tons CO2e annually per household"},
+      {"title": "Choose Trains Over Short-Haul Flights", "description": "For trips under 500km, take the train instead of flying to drastically cut travel emissions.", "category": "travel", "impact_estimate": "Reduces travel emissions by up to 90% compared to flying"}
+    ];
+
+    // Seed recipes if empty
+    final recipesSnap = await _firestore.collection(recipesCollection).limit(1).get();
+    if (recipesSnap.docs.isEmpty) {
+      for (final recipe in recipes) {
+        await _firestore.collection(recipesCollection).add(recipe);
+      }
+    }
+
+    // Seed challenges if empty
+    final challengesSnap = await _firestore.collection('challenges').limit(1).get();
+    if (challengesSnap.docs.isEmpty) {
+      for (final challenge in challenges) {
+        await _firestore.collection('challenges').doc(challenge['id']).set(challenge);
+      }
+    }
+
+    // Seed content if empty
+    final contentSnap = await _firestore.collection(contentCollection).limit(1).get();
+    if (contentSnap.docs.isEmpty) {
+      for (final item in content) {
+        await _firestore.collection(contentCollection).add(item);
+      }
+    }
+  }
 }

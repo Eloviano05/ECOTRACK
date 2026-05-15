@@ -627,6 +627,17 @@ class _SettingsSection extends StatelessWidget {
                 onChanged: onNotificationsChanged,
                 showDivider: true,
               ),
+              TextButton(
+                onPressed: () => NotificationService.instance.showTestNotification(),
+                child: Text(
+                  'Test Notification',
+                  style: GoogleFonts.inter(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: EcoColors.primary,
+                  ),
+                ),
+              ),
               _SettingsToggleRow(
                 icon: Icons.dark_mode_outlined,
                 label: 'Dark Mode',
@@ -635,6 +646,22 @@ class _SettingsSection extends StatelessWidget {
                 showDivider: false,
               ),
             ],
+          ),
+        ),
+        const SizedBox(height: 16),
+        Center(
+          child: TextButton(
+            onPressed: () async {
+              await NotificationService.instance.showTestNotification();
+            },
+            child: Text(
+              'Test Notification',
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: EcoColors.primary,
+              ),
+            ),
           ),
         ),
         const SizedBox(height: 16),
