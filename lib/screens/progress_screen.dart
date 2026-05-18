@@ -13,6 +13,7 @@ import '../theme/app_theme.dart';
 import 'challenges_screen.dart';
 import 'progress_category_detail_screen.dart';
 
+/// A dynamic progress dashboard bound directly to Firestore SSOT and SQLite logs.
 class ProgressScreen extends StatelessWidget {
   final bool isEmpty;
   final VoidCallback? onGoToDashboard;
@@ -25,7 +26,6 @@ class ProgressScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final metrics = isEmpty ? emptyProgressMetrics : activeProgressMetrics;
     final weeklyHeights =
         isEmpty ? List.filled(7, 0.05) : activeWeeklyHeights;
     final userId = FirebaseAuth.instance.currentUser?.uid;
@@ -88,10 +88,23 @@ class ProgressScreen extends StatelessWidget {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: FirestoreService.instance.getUserStream(userId),
       builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
+            !snapshot.hasData) {
+          return const Scaffold(
+            backgroundColor: EcoColors.background,
+            appBar: _ProgressAppBar(),
+            body: Center(
+              child: CircularProgressIndicator(
+                color: Color(0xFF2E7D32),
+              ),
+            ),
+          );
+        }
+
         final tasksCompleted = FirestoreService.tasksCompletedFromSnapshot(
           snapshot.data,
         );
-        final cloudStreak = FirestoreService.currentStreakFromSnapshot(
+        final currentStreak = FirestoreService.currentStreakFromSnapshot(
           snapshot.data,
         );
         final userData = snapshot.data?.data();
@@ -101,7 +114,7 @@ class ProgressScreen extends StatelessWidget {
           appBar: const _ProgressAppBar(),
           body: buildBody(
             tasksCompleted: tasksCompleted,
-            currentStreak: cloudStreak,
+            currentStreak: currentStreak,
             userData: userData,
           ),
         );
@@ -282,6 +295,7 @@ class _ImpactCards extends StatelessWidget {
     final co2Saved = (userData?['co2Saved'] as num?)?.toDouble() ?? 0.0;
     final waterSaved = (userData?['waterSaved'] as num?)?.toDouble() ?? 0.0;
     final energySaved = (userData?['energySaved'] as num?)?.toDouble() ?? 0.0;
+    final tasksDone = (userData?['tasksCompleted'] as num?)?.toInt() ?? 0;
 
     final impactMetrics = [
       _ImpactMetric(
@@ -310,7 +324,7 @@ class _ImpactCards extends StatelessWidget {
       ),
       _ImpactMetric(
         label: 'Tasks Done',
-        value: '${userData?['tasksCompleted'] ?? 0}',
+        value: '$tasksDone',
         icon: Icons.check_circle_rounded,
         iconColor: EcoColors.secondary,
         type: ProgressCategoryType.trees,

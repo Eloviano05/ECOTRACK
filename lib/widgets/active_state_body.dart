@@ -560,7 +560,7 @@ class _LiveInsightsBentoState extends State<_LiveInsightsBento> {
 
   Future<_InsightData> _load() async {
     final tips = await FirestoreService.instance
-        .getEducationalContent('energy_tips');
+        .getContentWithFallback('energy_tips');
     String tip = 'LED bulbs use 75% less energy and last 25× longer than incandescent lighting.';
     if (tips.isNotEmpty) {
       final pick = tips[Random().nextInt(tips.length)];

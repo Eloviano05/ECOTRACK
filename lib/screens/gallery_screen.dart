@@ -65,16 +65,23 @@ class _GalleryScreenState extends State<GalleryScreen> {
   }
 
   Future<List<_GalleryItem>> _loadGallery() async {
-    final urls = await FirestoreService.instance.getGalleryImages();
-    return List.generate(urls.length, (index) {
+    final rows = await FirestoreService.instance.getGalleryItemsWithFallback();
+    if (rows.isEmpty) {
+      return const [];
+    }
+    return rows.asMap().entries.map((entry) {
+      final index = entry.key;
+      final row = entry.value;
       return _GalleryItem(
-        imageUrl: urls[index],
-        title: index < _fallbackTitles.length
-            ? _fallbackTitles[index]
-            : 'Eco inspiration ${index + 1}',
-        tag: index < _fallbackTags.length ? _fallbackTags[index] : 'nature',
+        imageUrl: row['imageUrl'] as String? ?? '',
+        title: row['title'] as String? ??
+            (index < _fallbackTitles.length
+                ? _fallbackTitles[index]
+                : 'Eco inspiration ${index + 1}'),
+        tag: row['tag'] as String? ??
+            (index < _fallbackTags.length ? _fallbackTags[index] : 'nature'),
       );
-    });
+    }).toList();
   }
 
   void _reloadGallery() {

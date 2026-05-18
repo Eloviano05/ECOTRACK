@@ -53,7 +53,7 @@ class _TipsScreenState extends State<TipsScreen> {
   void _reloadContent() {
     setState(() {
       _contentFuture = FirestoreService.instance
-          .getEducationalContent(_selectedCategory);
+          .getContentWithFallback(_selectedCategory);
     });
   }
 
@@ -299,6 +299,7 @@ class _TipsScreenState extends State<TipsScreen> {
                         title: item['title'] as String? ?? 'Untitled',
                         summary: item['summary'] as String? ?? '',
                         category: item['category'] as String? ?? '',
+                        imageUrl: item['imageUrl'] as String? ?? '',
                         isSaved: isSaved,
                         onBookmark: () {
                           FirestoreService.instance.toggleSaveTip(
@@ -454,6 +455,7 @@ class _ContentCard extends StatelessWidget {
     required this.title,
     required this.summary,
     required this.category,
+    required this.imageUrl,
     required this.isSaved,
     required this.onBookmark,
     required this.onTap,
@@ -462,6 +464,7 @@ class _ContentCard extends StatelessWidget {
   final String title;
   final String summary;
   final String category;
+  final String imageUrl;
   final bool isSaved;
   final VoidCallback onBookmark;
   final VoidCallback onTap;
@@ -473,44 +476,100 @@ class _ContentCard extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: EcoColors.surfaceContainerLowest,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: EcoColors.surfaceContainer),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: EcoColors.outlineVariant.withOpacity(0.5)),
           boxShadow: const [
             BoxShadow(
               color: Colors.black12,
               blurRadius: 4,
-              offset: Offset(0, 1),
+              offset: Offset(0, 2),
             ),
           ],
         ),
-        child: Row(
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: iconBg,
+            // Premium Image at the top
+            SizedBox(
+              height: 160,
+              width: double.infinity,
+              child: Image.network(
+                imageUrl.isNotEmpty
+                    ? imageUrl
+                    : 'https://images.unsplash.com/photo-1542601906990-b4d3fb778b09?w=800&q=80',
+                fit: BoxFit.cover,
+                errorBuilder: (_, __, ___) => Container(
+                  color: EcoColors.secondaryContainer,
+                  alignment: Alignment.center,
+                  child: const Icon(
+                    Icons.image_not_supported_rounded,
+                    color: EcoColors.primary,
+                    size: 40,
+                  ),
+                ),
               ),
-              child: Icon(icon, color: iconFg, size: 26),
             ),
-            const SizedBox(width: 14),
-            Expanded(
+            // White space content area below image
+            Padding(
+              padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  Row(
+                    children: [
+                      // Category badge
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: iconBg.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(icon, color: iconFg, size: 14),
+                            const SizedBox(width: 4),
+                            Text(
+                              category.toUpperCase(),
+                              style: GoogleFonts.publicSans(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: 1.1,
+                                color: iconFg,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Spacer(),
+                      // Bookmark sits cleanly in white space
+                      IconButton(
+                        constraints: const BoxConstraints(),
+                        padding: EdgeInsets.zero,
+                        onPressed: onBookmark,
+                        icon: Icon(
+                          isSaved ? Icons.bookmark : Icons.bookmark_border,
+                          color: isSaved ? EcoColors.primary : EcoColors.onSurfaceVariant,
+                          size: 24,
+                        ),
+                        tooltip: isSaved ? 'Remove from saved' : 'Save tip',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
                   Text(
                     title,
                     style: GoogleFonts.inter(
-                      fontWeight: FontWeight.w700,
-                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 16,
                       color: EcoColors.onSurface,
+                      letterSpacing: -0.4,
                     ),
                   ),
-                  const SizedBox(height: 3),
+                  const SizedBox(height: 6),
                   Text(
                     summary,
                     maxLines: 2,
@@ -518,24 +577,11 @@ class _ContentCard extends StatelessWidget {
                     style: GoogleFonts.inter(
                       fontSize: 13,
                       color: EcoColors.onSurfaceVariant,
-                      height: 1.4,
+                      height: 1.45,
                     ),
                   ),
                 ],
               ),
-            ),
-            IconButton(
-              onPressed: onBookmark,
-              icon: Icon(
-                isSaved ? Icons.bookmark : Icons.bookmark_border,
-                color: isSaved ? EcoColors.primary : EcoColors.onSurfaceVariant,
-              ),
-              tooltip: isSaved ? 'Remove from saved' : 'Save tip',
-            ),
-            const Icon(
-              Icons.chevron_right_rounded,
-              color: EcoColors.outlineVariant,
-              size: 24,
             ),
           ],
         ),

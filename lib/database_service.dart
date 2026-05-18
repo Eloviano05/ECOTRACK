@@ -1,4 +1,3 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:path/path.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -23,10 +22,81 @@ class DatabaseService {
     final dbPath = await getDatabasesPath();
     final path = join(dbPath, filePath);
 
-    return await openDatabase(path, version: 1, onCreate: _createDB);
+    return await openDatabase(
+      path,
+      version: 3,
+      onCreate: _createDB,
+      onUpgrade: _onUpgrade,
+    );
   }
 
-  // Task 1: Schema Design
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    if (oldVersion < 2) {
+      await _createCacheTables(db);
+    }
+    if (oldVersion < 3) {
+      await _ensureMealPlanColumns(db);
+      await _recreateGalleryCacheTable(db);
+    }
+  }
+
+  Future<void> _createCacheTables(Database db) async {
+    await db.execute('''
+CREATE TABLE IF NOT EXISTS cached_recipes (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+)
+''');
+    await db.execute('''
+CREATE TABLE IF NOT EXISTS cached_challenges (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+)
+''');
+    await db.execute('''
+CREATE TABLE IF NOT EXISTS cached_content (
+  id TEXT PRIMARY KEY,
+  category TEXT NOT NULL,
+  data TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+)
+''');
+    await _recreateGalleryCacheTable(db);
+  }
+
+  Future<void> _recreateGalleryCacheTable(Database db) async {
+    await db.execute('DROP TABLE IF EXISTS cached_gallery');
+    await db.execute('''
+CREATE TABLE cached_gallery (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+)
+''');
+  }
+
+  Future<void> _ensureMealPlanColumns(Database db) async {
+    final cols = await db.rawQuery('PRAGMA table_info(meal_plans)');
+    final names = cols.map((c) => c['name'] as String).toSet();
+    if (!names.contains('meal_type')) {
+      await db.execute(
+        "ALTER TABLE meal_plans ADD COLUMN meal_type TEXT NOT NULL DEFAULT 'Dinner'",
+      );
+    }
+    if (!names.contains('carbon_kg')) {
+      await db.execute(
+        'ALTER TABLE meal_plans ADD COLUMN carbon_kg REAL NOT NULL DEFAULT 0.0',
+      );
+    }
+    if (!names.contains('is_custom')) {
+      await db.execute(
+        'ALTER TABLE meal_plans ADD COLUMN is_custom INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+  }
+
   Future _createDB(Database db, int version) async {
     await db.execute('''
 CREATE TABLE carbon_log (
@@ -68,25 +138,60 @@ CREATE TABLE meal_plans (
   user_id TEXT NOT NULL,
   date TEXT NOT NULL,
   recipe_title TEXT NOT NULL,
+  meal_type TEXT NOT NULL DEFAULT 'Dinner',
+  carbon_kg REAL NOT NULL DEFAULT 0.0,
+  is_custom INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL
+)
+''');
+
+    // Offline cache tables for Firestore data
+    await db.execute('''
+CREATE TABLE cached_recipes (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+)
+''');
+
+    await db.execute('''
+CREATE TABLE cached_challenges (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+)
+''');
+
+    await db.execute('''
+CREATE TABLE cached_content (
+  id TEXT PRIMARY KEY,
+  category TEXT NOT NULL,
+  data TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+)
+''');
+
+    await db.execute('''
+CREATE TABLE cached_gallery (
+  id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  synced_at TEXT NOT NULL
 )
 ''');
   }
 
-  // Task 2: Tracking Logic
   Future<void> logCarbonActivity(
       String userId, String category, String? subcategory, double quantity) async {
     final db = await instance.database;
 
-    // Predefined map of emission factors
     final Map<String, double> emissionFactors = {
-      'Car': 0.2, // kg/km
-      'Electricity': 0.5, // kg/kWh
-      'Meat meal': 2.5, // kg/meal
+      'Car': 0.2,
+      'Electricity': 0.5,
+      'Meat meal': 2.5,
     };
 
-    double factor = emissionFactors[category] ?? 
-                    (subcategory != null ? (emissionFactors[subcategory] ?? 0.0) : 0.0);
+    double factor = emissionFactors[category] ??
+        (subcategory != null ? (emissionFactors[subcategory] ?? 0.0) : 0.0);
     double carbonKg = quantity * factor;
     String date = DateTime.now().toIso8601String().split('T').first;
 
@@ -99,20 +204,41 @@ CREATE TABLE meal_plans (
       'carbon_kg': carbonKg,
     });
 
-    // Mock impact calculation for carbon logging
-    final mockCo2 = carbonKg;
-    final mockWater = 5.0; // 5L water saved per carbon action
-    final mockEnergy = 0.5; // 0.5 kWh energy saved per carbon action
+    double co2Saved = 0.0;
+    double waterSaved = 0.0;
+    double energySaved = 0.0;
+
+    final cat = category.toLowerCase();
+    final sub = subcategory?.toLowerCase() ?? '';
+
+    if (cat == 'transport' || cat == 'mobility') {
+      if (sub == 'bus' || sub == 'train') {
+        co2Saved = quantity * 0.15;
+        waterSaved = quantity * 0.05;
+        energySaved = quantity * 0.2;
+      } else if (sub == 'bike' || sub == 'walk') {
+        co2Saved = quantity * 0.20;
+        waterSaved = quantity * 0.1;
+        energySaved = quantity * 0.3;
+      }
+    } else if (cat == 'car' || cat == 'electricity' || cat == 'meat meal') {
+      co2Saved = 0;
+      waterSaved = 0;
+      energySaved = 0;
+    } else {
+      co2Saved = quantity * 0.1;
+      waterSaved = quantity * 1.0;
+      energySaved = quantity * 0.05;
+    }
 
     await _syncTasksCompletedToCloud(
       userId,
-      co2: mockCo2,
-      water: mockWater,
-      energy: mockEnergy,
+      co2: co2Saved,
+      water: waterSaved,
+      energy: energySaved,
     );
   }
 
-  // Task 3: Data Retrieval
   Future<double> getDailyCarbonTotal(String userId, String date) async {
     final db = await instance.database;
 
@@ -128,7 +254,6 @@ CREATE TABLE meal_plans (
     }
   }
 
-  // Waste Tracking Logic
   Future<void> logWasteAction(String userId, String actionType, int quantity) async {
     final db = await instance.database;
 
@@ -149,16 +274,37 @@ CREATE TABLE meal_plans (
       'waste_saved_kg': wasteSavedKg,
     });
 
-    // Mock impact calculation for waste logging
-    final mockCo2 = wasteSavedKg * 0.5; // 0.5 kg CO2 saved per kg waste
-    final mockWater = wasteSavedKg * 100.0; // 100L water saved per kg waste
-    final mockEnergy = 0.2; // 0.2 kWh energy saved per waste action
+    double co2Saved = 0.0;
+    double waterSaved = 0.0;
+    double energySaved = 0.0;
+
+    if (actionType == 'reusable_bottle') {
+      co2Saved = quantity * 0.08;
+      waterSaved = quantity * 3.0;
+      energySaved = quantity * 0.15;
+    } else if (actionType == 'compost') {
+      co2Saved = quantity * 0.25;
+      waterSaved = quantity * 5.0;
+      energySaved = quantity * 0.05;
+    } else if (actionType == 'recycle_can') {
+      co2Saved = quantity * 0.12;
+      waterSaved = quantity * 1.2;
+      energySaved = quantity * 0.95;
+    } else if (actionType == 'reusable_bag') {
+      co2Saved = quantity * 0.5;
+      waterSaved = quantity * 2.0;
+      energySaved = quantity * 0.1;
+    } else {
+      co2Saved = quantity * 0.1;
+      waterSaved = quantity * 1.5;
+      energySaved = quantity * 0.08;
+    }
 
     await _syncTasksCompletedToCloud(
       userId,
-      co2: mockCo2,
-      water: mockWater,
-      energy: mockEnergy,
+      co2: co2Saved,
+      water: waterSaved,
+      energy: energySaved,
     );
   }
 
@@ -168,24 +314,16 @@ CREATE TABLE meal_plans (
     double water = 0.0,
     double energy = 0.0,
   }) async {
-    try {
-      await FirebaseFirestore.instance.collection('users').doc(userId).update({
-        'tasksCompleted': FieldValue.increment(1),
-        if (co2 > 0) 'co2Saved': FieldValue.increment(co2),
-        if (water > 0) 'waterSaved': FieldValue.increment(water),
-        if (energy > 0) 'energySaved': FieldValue.increment(energy),
-      });
-    } catch (_) {
-      await FirestoreService.instance.incrementTasksCompleted(
-        userId,
-        co2: co2,
-        water: water,
-        energy: energy,
-      );
-    }
+    final streak = await getCurrentStreak(userId);
+    await FirestoreService.instance.incrementTasksCompleted(
+      userId,
+      co2: co2,
+      water: water,
+      energy: energy,
+      currentStreak: streak,
+    );
   }
 
-  // Challenge Tracking Logic
   Future<void> joinChallenge(String userId, String challengeId) async {
     final db = await instance.database;
     String date = DateTime.now().toIso8601String().split('T').first;
@@ -197,7 +335,8 @@ CREATE TABLE meal_plans (
     });
   }
 
-  Future<void> updateChallengeProgress(int challengeRecordId, String newCompletedDaysJson) async {
+  Future<void> updateChallengeProgress(
+      int challengeRecordId, String newCompletedDaysJson) async {
     final db = await instance.database;
 
     await db.update(
@@ -210,21 +349,25 @@ CREATE TABLE meal_plans (
 
   Future<int> getTasksCompleted(String userId) async {
     final db = await instance.database;
-    final carbonResult = await db.rawQuery('SELECT COUNT(*) as count FROM carbon_log WHERE user_id = ?', [userId]);
-    final wasteResult = await db.rawQuery('SELECT COUNT(*) as count FROM waste_log WHERE user_id = ?', [userId]);
-    
+    final carbonResult = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM carbon_log WHERE user_id = ?', [userId]);
+    final wasteResult = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM waste_log WHERE user_id = ?', [userId]);
+
     int carbonCount = Sqflite.firstIntValue(carbonResult) ?? 0;
     int wasteCount = Sqflite.firstIntValue(wasteResult) ?? 0;
-    
+
     return carbonCount + wasteCount;
   }
 
   Future<int> getCurrentStreak(String userId) async {
     final db = await instance.database;
-    
-    final carbonDates = await db.rawQuery('SELECT DISTINCT date FROM carbon_log WHERE user_id = ?', [userId]);
-    final wasteDates = await db.rawQuery('SELECT DISTINCT date FROM waste_log WHERE user_id = ?', [userId]);
-    
+
+    final carbonDates = await db.rawQuery(
+        'SELECT DISTINCT date FROM carbon_log WHERE user_id = ?', [userId]);
+    final wasteDates = await db.rawQuery(
+        'SELECT DISTINCT date FROM waste_log WHERE user_id = ?', [userId]);
+
     Set<String> uniqueDates = {};
     for (var row in carbonDates) {
       if (row['date'] != null) uniqueDates.add(row['date'].toString());
@@ -232,26 +375,31 @@ CREATE TABLE meal_plans (
     for (var row in wasteDates) {
       if (row['date'] != null) uniqueDates.add(row['date'].toString());
     }
-    
-    List<String> sortedDates = uniqueDates.toList()..sort((a, b) => b.compareTo(a));
-    
+
+    List<String> sortedDates = uniqueDates.toList()
+      ..sort((a, b) => b.compareTo(a));
+
     if (sortedDates.isEmpty) return 0;
-    
+
     DateTime today = DateTime.now();
     String todayStr = today.toIso8601String().split('T').first;
-    String yesterdayStr = today.subtract(const Duration(days: 1)).toIso8601String().split('T').first;
-    
+    String yesterdayStr = today
+        .subtract(const Duration(days: 1))
+        .toIso8601String()
+        .split('T')
+        .first;
+
     int streak = 0;
     DateTime currentDateToMatch = today;
-    
+
     if (sortedDates.first != todayStr && sortedDates.first != yesterdayStr) {
       return 0;
     }
-    
+
     if (sortedDates.first == yesterdayStr) {
-       currentDateToMatch = today.subtract(const Duration(days: 1));
+      currentDateToMatch = today.subtract(const Duration(days: 1));
     }
-    
+
     for (String dateStr in sortedDates) {
       if (dateStr == currentDateToMatch.toIso8601String().split('T').first) {
         streak++;
@@ -260,86 +408,139 @@ CREATE TABLE meal_plans (
         break;
       }
     }
-    
+
     return streak;
   }
 
-  // Meal Plan Methods
-  Future<int> insertMealPlan(String userId, String date, String recipeTitle) async {
-    final db = await instance.database;
-    String createdAt = DateTime.now().toIso8601String();
+  // ── Meal planner (Module 4) ─────────────────────────────────────────────
 
-    return await db.insert('meal_plans', {
+  /// Saves a planned meal to local SQLite (`meal_plans` table).
+  Future<void> addPlannedMeal(
+    String userId,
+    String date,
+    String mealType,
+    String recipeTitle, {
+    double carbonKg = 0.0,
+    bool isCustom = false,
+  }) async {
+    final db = await instance.database;
+    final createdAt = DateTime.now().toIso8601String();
+
+    await db.insert('meal_plans', {
       'user_id': userId,
       'date': date,
       'recipe_title': recipeTitle,
+      'meal_type': mealType,
+      'carbon_kg': carbonKg,
+      'is_custom': isCustom ? 1 : 0,
       'created_at': createdAt,
     });
+  }
+
+  /// All meals for a single calendar day, ordered Breakfast → Lunch → Dinner.
+  Future<List<Map<String, dynamic>>> getPlannedMealsForDate(
+    String userId,
+    String date,
+  ) async {
+    final db = await instance.database;
+
+    final result = await db.rawQuery(
+      '''
+SELECT * FROM meal_plans
+WHERE user_id = ? AND date = ?
+ORDER BY
+  CASE meal_type
+    WHEN 'Breakfast' THEN 1
+    WHEN 'Lunch' THEN 2
+    WHEN 'Dinner' THEN 3
+    ELSE 4
+  END,
+  id ASC
+''',
+      [userId, date],
+    );
+
+    return result.map((row) => Map<String, dynamic>.from(row)).toList();
+  }
+
+  /// Legacy helper — assigns a library recipe as Dinner.
+  Future<int> insertMealPlan(String userId, String date, String recipeTitle) async {
+    await addPlannedMeal(
+      userId,
+      date,
+      'Dinner',
+      recipeTitle,
+      isCustom: false,
+    );
+    final db = await instance.database;
+    final idResult = await db.rawQuery('SELECT last_insert_rowid() as id');
+    return Sqflite.firstIntValue(idResult) ?? 0;
   }
 
   Future<List<Map<String, dynamic>>> getMealPlans(String userId) async {
     final db = await instance.database;
 
     final result = await db.rawQuery(
-      'SELECT * FROM meal_plans WHERE user_id = ? ORDER BY date ASC',
+      'SELECT * FROM meal_plans WHERE user_id = ? ORDER BY date ASC, id ASC',
       [userId],
     );
 
     return result.map((row) => Map<String, dynamic>.from(row)).toList();
   }
 
-  // Weekly Activity Time-Series
   Future<List<int>> getWeeklyActivity(String userId) async {
     final db = await instance.database;
     final now = DateTime.now();
     final monday = now.subtract(Duration(days: now.weekday - 1));
-    
+
     final weeklyActivity = <int>[];
-    
+
     for (int i = 0; i < 7; i++) {
       final day = monday.add(Duration(days: i));
       final dayStr = day.toIso8601String().split('T').first;
-      
-      // Check if this day is in the future
+
       if (day.isAfter(now)) {
-        weeklyActivity.add(-1); // Future day
+        weeklyActivity.add(-1);
         continue;
       }
-      
-      // Query carbon_log for this day
+
       final carbonResult = await db.rawQuery(
         'SELECT COUNT(*) as count FROM carbon_log WHERE user_id = ? AND date = ?',
         [userId, dayStr],
       );
       final carbonCount = Sqflite.firstIntValue(carbonResult) ?? 0;
-      
-      // Query waste_log for this day
+
       final wasteResult = await db.rawQuery(
         'SELECT COUNT(*) as count FROM waste_log WHERE user_id = ? AND date = ?',
         [userId, dayStr],
       );
       final wasteCount = Sqflite.firstIntValue(wasteResult) ?? 0;
-      
-      // Query user_challenge for this day (date_joined or completed_days containing this date)
+
       final challengeResult = await db.rawQuery(
         'SELECT COUNT(*) as count FROM user_challenge WHERE user_id = ? AND date_joined = ?',
         [userId, dayStr],
       );
       final challengeCount = Sqflite.firstIntValue(challengeResult) ?? 0;
-      
-      // If any activity was logged on this day, mark as completed
-      if (carbonCount > 0 || wasteCount > 0 || challengeCount > 0) {
-        weeklyActivity.add(1); // Completed
+
+      final mealResult = await db.rawQuery(
+        'SELECT COUNT(*) as count FROM meal_plans WHERE user_id = ? AND date = ?',
+        [userId, dayStr],
+      );
+      final mealCount = Sqflite.firstIntValue(mealResult) ?? 0;
+
+      if (carbonCount > 0 ||
+          wasteCount > 0 ||
+          challengeCount > 0 ||
+          mealCount > 0) {
+        weeklyActivity.add(1);
       } else {
-        weeklyActivity.add(0); // Missed past day
+        weeklyActivity.add(0);
       }
     }
-    
+
     return weeklyActivity;
   }
 
-  /// Returns the last [limit] activities across carbon_log and waste_log,
-  /// mapped to [JourneyActivity] for display in the Journey section.
   Future<List<JourneyActivity>> getRecentActivities(
     String userId, {
     int limit = 5,
@@ -358,27 +559,24 @@ CREATE TABLE meal_plans (
       [userId, limit],
     );
 
-    // Convert carbon rows
     final List<Map<String, dynamic>> merged = [
       ...carbonRows.map((r) => {
             'title': _carbonLabel(r['category'] as String? ?? ''),
-            'subtitle': _fmtDate(r['date'] as String? ?? '') +
-                ' · Saved ${((r['carbon_kg'] as num?)?.toStringAsFixed(1) ?? '0.0')}kg CO₂',
+            'subtitle':
+                '${_fmtDate(r['date'] as String? ?? '')} · Saved ${((r['carbon_kg'] as num?)?.toStringAsFixed(1) ?? '0.0')}kg CO₂',
             'iconName': _carbonIcon(r['category'] as String? ?? ''),
             'ts': r['date'] as String? ?? '',
           }),
       ...wasteRows.map((r) => {
             'title': _wasteLabel(r['action_type'] as String? ?? ''),
-            'subtitle': _fmtDate(r['date'] as String? ?? '') +
-                ' · Saved ${((r['waste_saved_kg'] as num?)?.toStringAsFixed(2) ?? '0.00')}kg waste',
+            'subtitle':
+                '${_fmtDate(r['date'] as String? ?? '')} · Saved ${((r['waste_saved_kg'] as num?)?.toStringAsFixed(2) ?? '0.00')}kg waste',
             'iconName': _wasteIcon(r['action_type'] as String? ?? ''),
             'ts': r['date'] as String? ?? '',
           }),
     ];
 
-    // Sort by date descending and take top [limit]
-    merged.sort((a, b) =>
-        (b['ts'] as String).compareTo(a['ts'] as String));
+    merged.sort((a, b) => (b['ts'] as String).compareTo(a['ts'] as String));
     final top = merged.take(limit).toList();
 
     return top

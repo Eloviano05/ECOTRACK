@@ -21,7 +21,7 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
   @override
   void initState() {
     super.initState();
-    _allContentFuture = FirestoreService.instance.getEducationalContent('all');
+    _allContentFuture = FirestoreService.instance.getContentWithFallback('all');
   }
 
   @override

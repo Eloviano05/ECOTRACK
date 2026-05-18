@@ -74,4 +74,28 @@ tasks.configureEach {
         } catch (_: Exception) {}
     }
 }
-// #endregion agent log
+// #region auto-copy hook
+tasks.matching { it.name.startsWith("assemble") }.configureEach {
+    doLast {
+        try {
+            val relocatedBuildDir = rootProject.layout.buildDirectory.get().asFile
+            val projectBuildDir = rootProject.projectDir.parentFile.resolve("build")
+            
+            // Define where the APK is in the relocated folder
+            val apkRelPath = "app/outputs/flutter-apk"
+            val sourceDir = relocatedBuildDir.resolve(apkRelPath)
+            val targetDir = projectBuildDir.resolve(apkRelPath)
+
+            if (sourceDir.exists()) {
+                println("[EcoTrack] Syncing APKs to project folder: ${targetDir.absolutePath}")
+                targetDir.mkdirs()
+                sourceDir.listFiles { f -> f.extension == "apk" }?.forEach { apk ->
+                    apk.copyTo(targetDir.resolve(apk.name), overwrite = true)
+                }
+            }
+        } catch (e: Exception) {
+            println("[EcoTrack] Failed to sync APK: ${e.message}")
+        }
+    }
+}
+// #endregion auto-copy hook

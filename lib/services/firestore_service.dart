@@ -1,5 +1,10 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import '../database_service.dart';
+import 'offline_sync_service.dart';
 
 /// Firestore SSOT for user profile state and educational content.
 class FirestoreService {
@@ -14,28 +19,54 @@ class FirestoreService {
   static const String recipesCollection = 'recipes';
   static const String communityCollection = 'community_posts';
   static const String galleryCollection = 'gallery';
+  static const String challengesCollection = 'challenges';
 
   DocumentReference<Map<String, dynamic>> _userRef(String userId) =>
       _firestore.collection(usersCollection).doc(userId);
 
-  /// Creates `users/{uid}` on first login/sign-up with default cloud state.
-  Future<void> syncUserDocument(User user) async {
-    final ref = _userRef(user.uid);
-    final snapshot = await ref.get();
-
-    if (!snapshot.exists) {
-      await ref.set({
-        'displayName': user.displayName,
+  static Map<String, dynamic> _defaultUserFields(User user) => {
+        'displayName': user.displayName ?? 'Eco-Warrior',
         'email': user.email,
         'goalTitle': 'Reduce Waste',
         'notificationsEnabled': true,
         'tasksCompleted': 0,
         'currentStreak': 0,
         'savedTips': <String>[],
+        'activeChallenges': <String>[],
         'co2Saved': 0.0,
+        'co2SavedLastMonth': 0.0,
+        'changePercent': 12,
         'waterSaved': 0.0,
         'energySaved': 0.0,
-      });
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+
+  /// Creates or repairs `users/{uid}` so dashboard modules share one SSOT shape.
+  Future<void> syncUserDocument(User user) async {
+    final ref = _userRef(user.uid);
+    final snapshot = await ref.get();
+
+    if (!snapshot.exists) {
+      await ref.set(_defaultUserFields(user));
+      return;
+    }
+
+    final data = snapshot.data() ?? {};
+    final patch = <String, dynamic>{};
+    for (final entry in _defaultUserFields(user).entries) {
+      if (!data.containsKey(entry.key)) {
+        patch[entry.key] = entry.value;
+      }
+    }
+    if (user.displayName != null &&
+        user.displayName!.isNotEmpty &&
+        (data['displayName'] == null ||
+            (data['displayName'] as String).trim().isEmpty)) {
+      patch['displayName'] = user.displayName;
+    }
+    if (patch.isNotEmpty) {
+      patch['updatedAt'] = FieldValue.serverTimestamp();
+      await ref.set(patch, SetOptions(merge: true));
     }
   }
 
@@ -73,37 +104,57 @@ class FirestoreService {
     double co2 = 0.0,
     double water = 0.0,
     double energy = 0.0,
+    int? currentStreak,
   }) async {
+    final updateData = <String, dynamic>{
+      'tasksCompleted': FieldValue.increment(1),
+      if (co2 > 0) 'co2Saved': FieldValue.increment(co2),
+      if (water > 0) 'waterSaved': FieldValue.increment(water),
+      if (energy > 0) 'energySaved': FieldValue.increment(energy),
+      if (currentStreak != null) 'currentStreak': currentStreak,
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+
     try {
-      final updateData = <String, dynamic>{
-        'tasksCompleted': FieldValue.increment(1),
-      };
-      if (co2 > 0) {
-        updateData['co2Saved'] = FieldValue.increment(co2);
-      }
-      if (water > 0) {
-        updateData['waterSaved'] = FieldValue.increment(water);
-      }
-      if (energy > 0) {
-        updateData['energySaved'] = FieldValue.increment(energy);
-      }
       await _firestore.collection(usersCollection).doc(userId).update(updateData);
     } catch (_) {
-      final updateData = <String, dynamic>{
-        'tasksCompleted': FieldValue.increment(1),
-        'savedTips': <String>[],
-        'currentStreak': 0,
-        'goalTitle': 'Reduce Waste',
-        'notificationsEnabled': true,
-        'co2Saved': FieldValue.increment(co2),
-        'waterSaved': FieldValue.increment(water),
-        'energySaved': FieldValue.increment(energy),
-      };
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null && user.uid == userId) {
+        await syncUserDocument(user);
+      }
       await _firestore.collection(usersCollection).doc(userId).set(
-        updateData,
+        {
+          ...updateData,
+          'savedTips': <String>[],
+          'goalTitle': 'Reduce Waste',
+          'notificationsEnabled': true,
+          'activeChallenges': <String>[],
+          if (!updateData.containsKey('co2Saved')) 'co2Saved': 0.0,
+          if (!updateData.containsKey('waterSaved')) 'waterSaved': 0.0,
+          if (!updateData.containsKey('energySaved')) 'energySaved': 0.0,
+          if (currentStreak == null) 'currentStreak': 0,
+        },
         SetOptions(merge: true),
       );
     }
+  }
+
+  static double waterSavedFromSnapshot(
+    DocumentSnapshot<Map<String, dynamic>>? snapshot,
+  ) {
+    if (snapshot == null || !snapshot.exists) return 0;
+    final value = snapshot.data()?['waterSaved'];
+    if (value is num) return value.toDouble();
+    return 0;
+  }
+
+  static double energySavedFromSnapshot(
+    DocumentSnapshot<Map<String, dynamic>>? snapshot,
+  ) {
+    if (snapshot == null || !snapshot.exists) return 0;
+    final value = snapshot.data()?['energySaved'];
+    if (value is num) return value.toDouble();
+    return 0;
   }
 
   static List<String> savedTipsFromSnapshot(
@@ -135,6 +186,36 @@ class FirestoreService {
     if (value is int) return value;
     if (value is num) return value.toInt();
     return 0;
+  }
+
+  static double co2SavedFromSnapshot(
+    DocumentSnapshot<Map<String, dynamic>>? snapshot,
+  ) {
+    if (snapshot == null || !snapshot.exists) return 0;
+    final value = snapshot.data()?['co2Saved'];
+    if (value is num) return value.toDouble();
+    return 0;
+  }
+
+  static int changePercentFromSnapshot(
+    DocumentSnapshot<Map<String, dynamic>>? snapshot,
+  ) {
+    if (snapshot == null || !snapshot.exists) return 12;
+    final value = snapshot.data()?['changePercent'];
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return 12;
+  }
+
+  static Set<String> activeChallengesFromSnapshot(
+    DocumentSnapshot<Map<String, dynamic>>? snapshot,
+  ) {
+    if (snapshot == null || !snapshot.exists) return {};
+    final raw = snapshot.data()?['activeChallenges'];
+    if (raw is List) {
+      return raw.map((e) => e.toString()).toSet();
+    }
+    return {};
   }
 
   // ── Community forum ─────────────────────────────────────────────────────
@@ -327,90 +408,27 @@ class FirestoreService {
     return items;
   }
 
-  /// Seeds the recipes collection with dummy eco-friendly recipes if empty.
+  /// Legacy entry point — delegates to [seedProductionData] for SSOT recipe IDs.
   Future<void> seedRecipes() async {
-    final snapshot =
-        await _firestore.collection(recipesCollection).limit(1).get();
-
-    if (snapshot.docs.isNotEmpty) {
-      return;
-    }
-
-    final batch = _firestore.batch();
-    final collection = _firestore.collection(recipesCollection);
-
-    for (final doc in _seedRecipeDocuments) {
-      final ref = collection.doc();
-      batch.set(ref, doc);
-    }
-
-    await batch.commit();
+    await seedProductionData();
   }
 
-  static final List<Map<String, dynamic>> _seedRecipeDocuments = [
-    {
-      'title': 'Lentil Stew',
-      'prepTime': '25 mins',
-      'ecoBenefits': ['Low Carbon Impact', 'Plant-Based'],
-      'ingredients': [
-        '2 cups lentils',
-        '1 onion',
-        '2 carrots',
-        '3 celery stalks',
-        '4 cups vegetable broth'
-      ],
-      'steps': [
-        'Rinse lentils thoroughly',
-        'Chop vegetables',
-        'Sauté onions and carrots',
-        'Add lentils and broth',
-        'Simmer for 25 minutes'
-      ],
-      'imageUrl':
-          'https://images.unsplash.com/photo-1547592180-85f173990554?w=800&q=80',
-    },
-    {
-      'title': 'Zero-Waste Veggie Wrap',
-      'prepTime': '15 mins',
-      'ecoBenefits': ['Zero Waste', 'Plant-Based'],
-      'ingredients': [
-        'Whole wheat tortilla',
-        'Leftover vegetables',
-        'Hummus',
-        'Fresh herbs'
-      ],
-      'steps': [
-        'Warm tortilla',
-        'Spread hummus',
-        'Add vegetables',
-        'Roll tightly',
-        'Cut in half'
-      ],
-      'imageUrl':
-          'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800&q=80',
-    },
-    {
-      'title': 'Locally Sourced Salad',
-      'prepTime': '10 mins',
-      'ecoBenefits': ['Local Ingredients', 'Low Carbon Impact'],
-      'ingredients': [
-        'Mixed greens',
-        'Local tomatoes',
-        'Cucumber',
-        'Olive oil',
-        'Lemon juice'
-      ],
-      'steps': [
-        'Wash vegetables',
-        'Chop into bite-sized pieces',
-        'Mix in bowl',
-        'Drizzle with dressing',
-        'Serve fresh'
-      ],
-      'imageUrl':
-          'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800&q=80',
-    },
-  ];
+  /// Live recipe library stream (Meal Planner / detail screens).
+  Stream<QuerySnapshot<Map<String, dynamic>>> getRecipesStream() {
+    return _firestore
+        .collection(recipesCollection)
+        .orderBy('title')
+        .snapshots();
+  }
+
+  Future<Map<String, dynamic>?> getChallengeById(String challengeId) async {
+    final doc = await _firestore
+        .collection(challengesCollection)
+        .doc(challengeId)
+        .get();
+    if (!doc.exists) return null;
+    return {...?doc.data(), 'id': doc.id};
+  }
 
   static final List<Map<String, dynamic>> _seedDocuments = [
     // ── products ──────────────────────────────────────────────────────────
@@ -705,52 +723,585 @@ class FirestoreService {
     },
   ];
 
+  /// Live stream of challenges (SSOT). Ordered for stable UI.
+  Stream<QuerySnapshot<Map<String, dynamic>>> getActiveChallengesStream() {
+    return _firestore
+        .collection(challengesCollection)
+        .orderBy('title')
+        .snapshots();
+  }
+
+  Future<void> _setById(
+    String collection,
+    String docId,
+    Map<String, dynamic> data,
+  ) async {
+    final payload = Map<String, dynamic>.from(data)..remove('id');
+    await _firestore
+        .collection(collection)
+        .doc(docId)
+        .set(payload, SetOptions(merge: true));
+  }
+
   /// Master seeding function for production data.
-  /// Seeds recipes, challenges, and content collections if they are empty.
+  /// Seeds recipes, challenges, and content collections, strictly setting document IDs to prevent duplicates.
   Future<void> seedProductionData() async {
-    // Recipes data
+    // 1. Recipes Seed Data (from testdata.txt)
     final List<Map<String, dynamic>> recipes = [
-      {"title": "One-Pot Lentil Bolognese", "type": "vegan_main", "ingredients": ["1 cup brown lentils", "1 onion, diced", "2 carrots, diced", "2 celery stalks, diced", "3 cloves garlic, minced", "1 can crushed tomatoes", "2 tbsp tomato paste", "1 tsp dried oregano", "500ml vegetable broth", "Salt and pepper to taste"], "carbon_per_serving_kg": 0.4, "image_url": "https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=800", "instructions": "Sauté onion, carrots, celery until soft. Add garlic, lentils, tomatoes, broth, and spices. Simmer 25 mins until lentils are tender. Serve over whole-grain pasta or zucchini noodles.", "tags": ["vegan", "low-carbon", "high-protein", "meal-prep"]},
-      {"title": "Coconut Chickpea Curry", "type": "curry", "ingredients": ["1 can chickpeas, drained", "1 can coconut milk", "1 onion, chopped", "2 tbsp curry powder", "1 tsp turmeric", "1 cup spinach", "1 cup cauliflower florets", "1 tbsp coconut oil", "Salt to taste"], "carbon_per_serving_kg": 0.6, "image_url": "https://images.unsplash.com/photo-1565557623262-b51c2513a641?auto=format&fit=crop&w=800", "instructions": "Heat oil, sauté onion until golden. Add spices, toast 1 min. Add chickpeas, cauliflower, coconut milk. Simmer 15 mins. Stir in spinach until wilted. Serve with brown rice.", "tags": ["vegetarian", "gluten-free", "anti-inflammatory", "quick-meal"]},
-      {"title": "Rainbow Quinoa Buddha Bowl", "type": "bowl", "ingredients": ["1 cup cooked quinoa", "1/2 cup roasted sweet potato", "1/2 cup chickpeas", "1/4 avocado, sliced", "1/4 cup shredded purple cabbage", "2 tbsp tahini", "1 tbsp lemon juice", "Handful of kale"], "carbon_per_serving_kg": 0.3, "image_url": "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=800", "instructions": "Arrange cooked quinoa, roasted sweet potato, chickpeas, cabbage, kale, and avocado in a bowl. Whisk tahini, lemon juice, and water for dressing. Drizzle and serve.", "tags": ["vegan", "nutrient-dense", "no-cook-option", "colorful"]}
+      {
+        'id': 'REC001',
+        'title': 'One-Pot Lentil & Vegetable Curry',
+        'category': 'Plant-Based Main',
+        'prepTime': '15 mins',
+        'prep_time_minutes': 15,
+        'cook_time_minutes': 30,
+        'servings': 4,
+        'difficulty': 'Easy',
+        'description': 'A hearty, protein-rich curry using pantry staples and seasonal vegetables. Perfect for meal prep!',
+        'ingredients': [
+          'Red lentils (Legumes fix nitrogen in soil, reducing fertilizer needs)',
+          'Coconut milk (Choose brands with sustainable palm oil policies)',
+          'Seasonal vegetables (Buy local/seasonal to reduce transport emissions)',
+          'Onion, garlic, ginger',
+          'Spices (Buy in bulk to reduce packaging waste)'
+        ],
+        'steps': [
+          'Sauté aromatics in 1 tbsp oil until fragrant',
+          'Add lentils, spices, and 3 cups water; simmer 20 mins',
+          'Stir in vegetables and coconut milk; cook 10 more mins',
+          'Season with salt, lemon juice, and fresh cilantro'
+        ],
+        'ecoBenefits': [
+          'Plant-based meal saves ~4kg CO₂ vs. beef equivalent',
+          'One-pot cooking reduces water/energy for cleanup',
+          'Uses affordable, shelf-stable ingredients to reduce food waste'
+        ],
+        'imageUrl': 'https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=800',
+        'user_rating': 4.8,
+        'tags': ['vegan', 'gluten-free', 'high-protein', 'budget', 'meal-prep']
+      },
+      {
+        'id': 'REC002',
+        'title': 'Zero-Waste Vegetable Scrap Broth',
+        'category': 'Foundation Recipe',
+        'prepTime': '10 mins',
+        'prep_time_minutes': 10,
+        'cook_time_minutes': 45,
+        'servings': 8,
+        'difficulty': 'Easy',
+        'description': 'Transform onion skins, carrot tops, and herb stems into a flavorful, nutrient-rich broth—no waste!',
+        'ingredients': [
+          'Vegetable scraps (onion skins, carrot peels, celery leaves, mushroom stems)',
+          'Garlic cloves (peels OK)',
+          'Bay leaf, peppercorns, thyme',
+          'Water (filtered tap water instead of bottled)'
+        ],
+        'steps': [
+          'Combine all scraps and aromatics in large pot',
+          'Cover with cold water; bring to boil, then reduce to simmer',
+          'Simmer uncovered 45 mins, skimming foam occasionally',
+          'Strain through fine mesh; cool and store in jars or freeze'
+        ],
+        'ecoBenefits': [
+          'Diverts ~1 lb food scraps from landfill per batch',
+          'Reduces need for store-bought broth (and its packaging)',
+          'Captures nutrients often discarded with peels/stems'
+        ],
+        'imageUrl': 'https://images.unsplash.com/photo-1565557623262-b51c2513a641?auto=format&fit=crop&w=800',
+        'user_rating': 4.9,
+        'tags': ['zero-waste', 'vegan', 'gluten-free', 'foundation', 'budget']
+      },
+      {
+        'id': 'REC003',
+        'title': 'Seasonal Grain Bowl Builder',
+        'category': 'Flexible Template',
+        'prepTime': '20 mins',
+        'prep_time_minutes': 20,
+        'cook_time_minutes': 25,
+        'servings': 2,
+        'difficulty': 'Easy',
+        'description': 'A customizable formula for nutritious, low-waste meals using whatever is in season and on hand.',
+        'ingredients': [
+          'Cooked grains (quinoa, farro, brown rice)',
+          'Plant protein (beans, lentils, tofu, tempeh)',
+          'Seasonal vegetables (roasted, raw, or fermented)',
+          'Healthy fat (avocado, seeds, tahini)',
+          'Flavor boost (herbs, citrus, vinegar, or homemade dressing)'
+        ],
+        'steps': [
+          'Cook grains according to package instructions',
+          'Prepare your chosen protein and vegetables',
+          'Assemble all components in a wide serving bowl',
+          'Drizzle with dressing, sprinkle seeds, and serve'
+        ],
+        'ecoBenefits': [
+          'Reduces food waste by using imperfect or surplus produce',
+          'Plant-forward formula lowers carbon footprint vs. meat-centric meals',
+          'Encourages seasonal eating, supporting local agriculture'
+        ],
+        'imageUrl': 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=800',
+        'user_rating': 4.7,
+        'tags': ['template', 'plant-based', 'seasonal', 'meal-prep', 'customizable']
+      }
     ];
 
-    // Challenges data
+    // 2. Challenges Seed Data (from testdata.txt)
     final List<Map<String, dynamic>> challenges = [
-      {"id": "plastic_free_jan_2026", "title": "Plastic-Free January Challenge", "description": "Reduce single-use plastic waste for 30 days with daily actionable swaps.", "start_date": "2026-01-01", "end_date": "2026-01-31", "actions": ["Carry a reusable water bottle and coffee cup", "Use cloth produce bags for grocery shopping", "Choose package-free fruits and vegetables", "Refuse plastic straws and cutlery when ordering takeout"]},
-      {"id": "meatless_monday_q1", "title": "Meatless Monday Kickstart", "description": "Replace one meat-based meal per week with a plant-powered alternative to lower your carbon footprint.", "start_date": "2026-01-06", "end_date": "2026-03-31", "actions": ["Try one new vegetarian recipe each Monday", "Share your plant-based meal photo in the app community", "Calculate your weekly carbon savings using the in-app tracker", "Invite a friend to join your Meatless Monday"]},
-      {"id": "home_energy_sprint_feb", "title": "Home Energy Sprint", "description": "Cut household energy use by 15% in February through small, consistent habit changes.", "start_date": "2026-02-01", "end_date": "2026-02-28", "actions": ["Lower thermostat by 1°C and wear a sweater", "Switch to LED bulbs in high-use fixtures", "Unplug devices or use smart power strips at night", "Wash clothes in cold water and air-dry when possible"]}
+      {
+        'id': 'CH001',
+        'title': 'Plastic-Free January Challenge',
+        'description': 'Go a month without single-use plastics. Track your swaps, use reusables, and build sustainable habits!',
+        'duration_days': 30,
+        'difficulty': 'Intermediate',
+        'category': 'Waste Reduction',
+        'tasks': [
+          'Bring reusable bags to all shopping trips',
+          'Use a refillable water bottle daily',
+          'Refuse plastic straws and cutlery',
+          'Choose package-free produce',
+          'Pack lunch in reusable containers'
+        ],
+        'rewards': {
+          'points': 150,
+          'badge': 'Plastic Warrior 🌊',
+          'impact_estimate': 'Prevents ~100 plastic items from entering landfills'
+        },
+        'tips': [
+          'Keep a zero-waste kit in your bag: utensils, napkin, container',
+          'Shop bulk bins with your own jars',
+          'Choose bar soap/shampoo over bottled versions'
+        ],
+        'prerequisite_level': 1,
+        'image_url': 'https://images.unsplash.com/photo-1591195853828-11ad59a44f6b?w=800&q=80'
+      },
+      {
+        'id': 'CH002',
+        'title': 'Meatless Monday Kickstart',
+        'description': 'Replace meat with plant-based proteins one day per week. Discover delicious, low-carbon alternatives!',
+        'duration_days': 30,
+        'difficulty': 'Beginner',
+        'category': 'Sustainable Eating',
+        'tasks': [
+          'Plan meatless dinners (one per week)',
+          'Try 2 new plant-based recipes',
+          'Research the water footprint of beef vs. beans',
+          'Share one meatless meal photo in the community'
+        ],
+        'rewards': {
+          'points': 120,
+          'badge': 'Plant Pioneer 🌱',
+          'impact_estimate': 'Saves ~1,200 gallons of water and 24kg CO2'
+        },
+        'tips': [
+          'Start with familiar dishes like pasta, stir-fries, tacos with lentils',
+          'Batch-cook grains and beans for easy meal assembly',
+          'Explore local farmers markets for fresh produce'
+        ],
+        'prerequisite_level': 0,
+        'image_url': 'https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=800&q=80'
+      },
+      {
+        'id': 'CH003',
+        'title': 'Home Energy Sprint',
+        'description': 'Cut household energy use by implementing 5 changes to reduce your utility bills and carbon footprint over 14 days.',
+        'duration_days': 14,
+        'difficulty': 'Advanced',
+        'category': 'Energy Conservation',
+        'tasks': [
+          'Conduct a home energy audit using the app checklist',
+          'Switch 5 bulbs to LED',
+          'Unplug vampire electronics overnight',
+          'Adjust thermostat by 2°F (summer/winter)',
+          'Run dishwasher/washer only with full loads'
+        ],
+        'rewards': {
+          'points': 200,
+          'badge': 'Energy Guardian ⚡',
+          'impact_estimate': 'Potential savings: 15% on electricity bills'
+        },
+        'tips': [
+          'Use smart power strips to eliminate phantom loads',
+          'Air-dry clothes when possible',
+          'Seal windows and doors to prevent energy leaks'
+        ],
+        'prerequisite_level': 2,
+        'image_url': 'https://images.unsplash.com/photo-1558449028-b53a9d771b3f?w=800&q=80'
+      },
+      {
+        'id': 'CH004',
+        'title': 'Compost Starter Challenge',
+        'description': 'Begin composting food scraps at home. Learn the basics, choose your system, and feed the soil.',
+        'duration_days': 21,
+        'difficulty': 'Intermediate',
+        'category': 'Waste Reduction',
+        'tasks': [
+          'Choose a composting method (bin, tumbler, vermicompost)',
+          'Collect greens and browns for 3 weeks',
+          'Turn your pile twice weekly',
+          'Log diverted food waste in the tracker',
+          'Share progress photo in community'
+        ],
+        'rewards': {
+          'points': 175,
+          'badge': 'Soil Savior 🪱',
+          'impact_estimate': 'Diverts ~15kg food waste from landfill; creates nutrient-rich soil'
+        },
+        'tips': [
+          'Balance 3 parts browns (leaves, paper) to 1 part greens (scraps)',
+          'Avoid meat, dairy, and oils in home compost',
+          'Keep pile moist like a wrung-out sponge'
+        ],
+        'prerequisite_level': 1,
+        'image_url': 'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=800&q=80'
+      }
     ];
 
-    // Content data
+    // 3. Content Seed Data (Educational Articles, Certs, Energy, Travel, Products)
     final List<Map<String, dynamic>> content = [
-      {"title": "Decode Eco-Labels Like a Pro", "description": "Learn to identify trustworthy certifications like Energy Star, Fair Trade, and FSC to avoid greenwashing.", "category": "certifications", "impact_estimate": "Prevents ~50kg CO2e/year by steering purchases toward verified sustainable brands"},
-      {"title": "Switch to Community Solar", "description": "Join a local community solar program to access renewable energy without installing panels on your roof.", "category": "energy_tips", "impact_estimate": "Offsets ~1.2 tons CO2e annually per household"},
-      {"title": "Choose Trains Over Short-Haul Flights", "description": "For trips under 500km, take the train instead of flying to drastically cut travel emissions.", "category": "travel", "impact_estimate": "Reduces travel emissions by up to 90% compared to flying"}
+      // Reusable Products
+      {
+        'id': 'EP001',
+        'category': 'products',
+        'title': 'HydroFlask Steel Bottle',
+        'summary': '32oz insulated bottle keeps drinks cold for 24hrs. Eliminates ~156 plastic bottles/year.',
+        'savingsLabel': 'Saves ~156 plastic bottles/year',
+        'imageUrl': 'https://images.unsplash.com/photo-1602143407151-7111542de6e8?w=800&q=80',
+        'steps': [
+          {'title': 'Keep insulated water bottle handy', 'description': 'Refill at tap and avoid single-use plastics.'}
+        ]
+      },
+      {
+        'id': 'EP002',
+        'category': 'products',
+        'title': 'Organic Cotton Produce Bags',
+        'summary': 'Lightweight, washable mesh bags for groceries. Replaces 500+ single-use plastic bags.',
+        'savingsLabel': 'Replaces 500+ single-use bags',
+        'imageUrl': 'https://images.unsplash.com/photo-1591195853828-11ad59a44f6b?w=800&q=80',
+        'steps': [
+          {'title': 'Pack produce bags', 'description': 'Store in tote bag so you always have them at checkout.'}
+        ]
+      },
+      // Certifications
+      {
+        'id': 'CERT001',
+        'category': 'certifications',
+        'title': 'ENERGY STAR Certification',
+        'summary': 'Certifies appliances and electronics that meet strict EPA energy efficiency guidelines.',
+        'savingsLabel': 'Uses 10-50% less energy',
+        'imageUrl': 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=800&q=80',
+        'steps': [
+          {'title': 'Check for blue star label', 'description': 'Save energy and bills by choosing certified models.'}
+        ]
+      },
+      {
+        'id': 'CERT003',
+        'category': 'certifications',
+        'title': 'Fair Trade Certified',
+        'summary': 'Guarantees fair wages, safe working conditions, and environmental protection.',
+        'savingsLabel': 'Ethical supply chains',
+        'imageUrl': 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=800&q=80',
+        'steps': [
+          {'title': 'Support Fair Trade farmers', 'description': 'Look for the circular seal on coffee, tea, and chocolate.'}
+        ]
+      },
+      // Energy Tips
+      {
+        'id': 'ET001',
+        'category': 'energy_tips',
+        'title': 'Switch to LED Bulbs',
+        'summary': 'Replace incandescent bulbs with ENERGY STAR-certified LEDs to save 75% energy.',
+        'savingsLabel': 'Saves ~\$55/year per household',
+        'imageUrl': 'https://images.unsplash.com/photo-1558449028-b53a9d771b3f?w=800&q=80',
+        'steps': [
+          {'title': 'Upgrade light fixtures', 'description': 'Switching to LEDs immediately lowers energy draw.'}
+        ]
+      },
+      {
+        'id': 'ET002',
+        'category': 'energy_tips',
+        'title': 'Optimize Thermostat Settings',
+        'summary': 'Adjust thermostat by 7-10°F for 8 hours/day to save up to 10% on heating and cooling.',
+        'savingsLabel': 'Saves up to 10% on utility bills',
+        'imageUrl': 'https://images.unsplash.com/photo-1558002038-1055907df827?w=800&q=80',
+        'steps': [
+          {'title': 'Automate settings', 'description': 'Set slightly cooler in winter, warmer in summer.'}
+        ]
+      },
+      // Travel Tips
+      {
+        'id': 'TR001',
+        'category': 'travel',
+        'title': 'Choose Train Commuting',
+        'summary': 'Rail travel produces 75% less CO₂ emissions per passenger-mile than driving alone.',
+        'savingsLabel': 'Produces 75% less CO₂ emissions',
+        'imageUrl': 'https://images.unsplash.com/photo-1474487548417-9cb5a7a7a27e?w=800&q=80',
+        'steps': [
+          {'title': 'Take the train', 'description': 'A green commute alternative for medium-to-long city transits.'}
+        ]
+      },
+      // Educational Articles
+      {
+        'id': 'EDU001',
+        'category': 'general_education',
+        'title': 'The True Cost of Fast Fashion',
+        'summary': 'The fashion industry produces 10% of global emissions. Learn how to build a durable wardrobe.',
+        'savingsLabel': 'Reduces clothing footprint',
+        'imageUrl': 'https://images.unsplash.com/photo-1532996122724-e3c354a0e0f0?w=800&q=80',
+        'steps': [
+          {'title': 'Buy high-quality secondhand', 'description': 'Extend garments life by 2.2 years to cut carbon footprint.'}
+        ]
+      },
+      {
+        'id': 'EDU002',
+        'category': 'general_education',
+        'title': 'Home Composting 101',
+        'summary': 'A complete visual guide to turn kitchen scraps into nutrient-rich soil gold.',
+        'savingsLabel': 'Soil revitalization & carbon capture',
+        'imageUrl': 'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=800&q=80',
+        'steps': [
+          {'title': 'Balance greens and browns', 'description': 'Maintain healthy ventilation and moisture levels.'}
+        ]
+      }
     ];
 
-    // Seed recipes if empty
-    final recipesSnap = await _firestore.collection(recipesCollection).limit(1).get();
-    if (recipesSnap.docs.isEmpty) {
-      for (final recipe in recipes) {
-        await _firestore.collection(recipesCollection).add(recipe);
+    for (final recipe in recipes) {
+      await _setById(
+        recipesCollection,
+        recipe['id'] as String,
+        recipe,
+      );
+    }
+
+    for (final challenge in challenges) {
+      final withActive = Map<String, dynamic>.from(challenge)
+        ..putIfAbsent('is_active', () => true);
+      await _setById(
+        challengesCollection,
+        challenge['id'] as String,
+        withActive,
+      );
+    }
+
+    for (final item in content) {
+      await _setById(
+        contentCollection,
+        item['id'] as String,
+        item,
+      );
+    }
+  }
+
+  /// Dual-write join: SQLite `user_challenge` + Firestore `activeChallenges`.
+  Future<void> joinChallenge(String userId, String challengeId) async {
+    final ref = _userRef(userId);
+    final snapshot = await ref.get();
+    final joined = activeChallengesFromSnapshot(snapshot);
+    if (joined.contains(challengeId)) {
+      return;
+    }
+
+    await DatabaseService.instance.joinChallenge(userId, challengeId);
+
+    try {
+      await ref.update({
+        'activeChallenges': FieldValue.arrayUnion([challengeId]),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } catch (_) {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null && user.uid == userId) {
+        await syncUserDocument(user);
+      }
+      await ref.set(
+        {
+          'activeChallenges': FieldValue.arrayUnion([challengeId]),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    }
+  }
+
+  /// Check if device has usable network connectivity.
+  Future<bool> isDeviceOnline() async {
+    final result = await Connectivity().checkConnectivity();
+    return OfflineSyncService.hasNetwork(result);
+  }
+
+  Future<bool> _isOnline() => isDeviceOnline();
+
+  Future<List<Map<String, dynamic>>> _cachedOrRemote({
+    required Future<List<Map<String, dynamic>>> Function() remote,
+    required Future<List<Map<String, dynamic>>> Function() cached,
+  }) async {
+    final cache = await cached();
+    if (!await _isOnline()) {
+      return cache;
+    }
+    try {
+      final live = await remote();
+      if (live.isNotEmpty) return live;
+      if (cache.isNotEmpty) return cache;
+      return live;
+    } catch (_) {
+      return cache;
+    }
+  }
+
+  /// Get recipes with offline fallback.
+  Future<List<Map<String, dynamic>>> getRecipesWithFallback() async {
+    return _cachedOrRemote(
+      remote: getRecipes,
+      cached: OfflineSyncService.instance.getCachedRecipes,
+    );
+  }
+
+  /// Get challenges with offline fallback.
+  Future<List<Map<String, dynamic>>> getChallengesWithFallback() async {
+    return _cachedOrRemote(
+      remote: () async {
+        final snapshot = await getActiveChallengesStream().first;
+        return snapshot.docs
+            .map((doc) => <String, dynamic>{...doc.data(), 'id': doc.id})
+            .toList();
+      },
+      cached: OfflineSyncService.instance.getCachedChallenges,
+    );
+  }
+
+  /// Get educational content with offline fallback.
+  Future<List<Map<String, dynamic>>> getContentWithFallback(
+    String category,
+  ) async {
+    return _cachedOrRemote(
+      remote: () => getEducationalContent(category),
+      cached: () =>
+          OfflineSyncService.instance.getCachedContent(category: category),
+    );
+  }
+
+  /// Get gallery image URLs with offline fallback.
+  Future<List<String>> getGalleryWithFallback() async {
+    final items = await getGalleryItemsWithFallback();
+    return items
+        .map((e) => e['imageUrl'] as String? ?? '')
+        .where((url) => url.isNotEmpty)
+        .toList();
+  }
+
+  /// Full gallery rows (title, tag, imageUrl) with offline fallback.
+  Future<List<Map<String, dynamic>>> getGalleryItemsWithFallback() async {
+    return _cachedOrRemote(
+      remote: () async {
+        final snapshot = await _firestore.collection(galleryCollection).get();
+        return snapshot.docs
+            .map((doc) => <String, dynamic>{...doc.data(), 'id': doc.id})
+            .toList();
+      },
+      cached: OfflineSyncService.instance.getCachedGalleryItems,
+    );
+  }
+
+  /// Live + offline-aware recipe list for UI streams.
+  Stream<List<Map<String, dynamic>>> watchRecipesWithFallback() {
+    return _catalogStream(
+      firestoreStream: getRecipesStream().map(
+        (snap) => snap.docs
+            .map((d) => <String, dynamic>{...d.data(), 'id': d.id})
+            .toList(),
+      ),
+      fallback: getRecipesWithFallback,
+    );
+  }
+
+  /// Live + offline-aware challenge list for UI streams.
+  Stream<List<Map<String, dynamic>>> watchChallengesWithFallback() {
+    return _catalogStream(
+      firestoreStream: getActiveChallengesStream().map(
+        (snap) => snap.docs
+            .map((d) => <String, dynamic>{...d.data(), 'id': d.id})
+            .toList(),
+      ),
+      fallback: getChallengesWithFallback,
+    );
+  }
+
+  Stream<List<Map<String, dynamic>>> _catalogStream({
+    required Stream<List<Map<String, dynamic>>> firestoreStream,
+    required Future<List<Map<String, dynamic>>> Function() fallback,
+  }) {
+    late StreamController<List<Map<String, dynamic>>> controller;
+    StreamSubscription<List<Map<String, dynamic>>>? fireSub;
+    StreamSubscription<void>? cacheSub;
+    StreamSubscription<List<ConnectivityResult>>? connectivitySub;
+
+    Future<void> emitFallback() async {
+      if (controller.isClosed) return;
+      try {
+        controller.add(await fallback());
+      } catch (_) {
+        controller.add(const []);
       }
     }
 
-    // Seed challenges if empty
-    final challengesSnap = await _firestore.collection('challenges').limit(1).get();
-    if (challengesSnap.docs.isEmpty) {
-      for (final challenge in challenges) {
-        await _firestore.collection('challenges').doc(challenge['id']).set(challenge);
+    Future<void> bindFirestore() async {
+      fireSub?.cancel();
+      if (!await isDeviceOnline()) {
+        await emitFallback();
+        return;
       }
+      fireSub = firestoreStream.listen(
+        (items) {
+          if (controller.isClosed) return;
+          if (items.isNotEmpty) {
+            controller.add(items);
+          } else {
+            emitFallback();
+          }
+        },
+        onError: (_) => emitFallback(),
+      );
     }
 
-    // Seed content if empty
-    final contentSnap = await _firestore.collection(contentCollection).limit(1).get();
-    if (contentSnap.docs.isEmpty) {
-      for (final item in content) {
-        await _firestore.collection(contentCollection).add(item);
-      }
-    }
+    controller = StreamController<List<Map<String, dynamic>>>(
+      onListen: () async {
+        await emitFallback();
+        await bindFirestore();
+        cacheSub = OfflineSyncService.instance.onCacheUpdated.listen((_) async {
+          await emitFallback();
+          await bindFirestore();
+        });
+        connectivitySub =
+            Connectivity().onConnectivityChanged.listen((_) async {
+          await bindFirestore();
+          await emitFallback();
+        });
+      },
+      onCancel: () async {
+        await fireSub?.cancel();
+        await cacheSub?.cancel();
+        await connectivitySub?.cancel();
+      },
+    );
+
+    return controller.stream;
+  }
+
+  /// Submits a high-fidelity contact inquiry to Firestore under the 'inquiries' collection.
+  Future<void> submitInquiry({
+    required String name,
+    required String email,
+    required String category,
+    required String message,
+    String? userId,
+  }) async {
+    await _firestore.collection('inquiries').add({
+      'name': name,
+      'email': email,
+      'category': category,
+      'message': message,
+      'userId': userId,
+      'timestamp': FieldValue.serverTimestamp(),
+    });
   }
 }

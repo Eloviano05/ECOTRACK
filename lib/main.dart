@@ -8,12 +8,14 @@ import 'firebase_options.dart';
 import 'tracker_provider.dart';
 import 'main_navigation.dart';
 import 'theme/app_theme.dart';
+import 'services/offline_sync_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  await OfflineSyncService.instance.initialize();
   runApp(const MyApp());
 }
 

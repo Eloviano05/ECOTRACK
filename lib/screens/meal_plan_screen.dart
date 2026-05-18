@@ -1,6 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+
 import '../database_service.dart';
 import '../services/firestore_service.dart';
 import '../theme/app_theme.dart';
@@ -14,28 +15,24 @@ class MealPlanScreen extends StatefulWidget {
 }
 
 class _MealPlanScreenState extends State<MealPlanScreen> {
-  late Future<List<Map<String, dynamic>>> _recipesFuture;
-  late Future<List<Map<String, dynamic>>> _mealPlansFuture;
+  int _plannerRefreshKey = 0;
 
-  @override
-  void initState() {
-    super.initState();
-    FirestoreService.instance.seedRecipes();
-    _loadData();
-  }
+  static const _mealTypes = ['Breakfast', 'Lunch', 'Dinner'];
 
-  void _loadData() {
-    final userId = FirebaseAuth.instance.currentUser?.uid;
-    if (userId != null) {
-      setState(() {
-        _recipesFuture = FirestoreService.instance.getRecipes();
-        _mealPlansFuture = DatabaseService.instance.getMealPlans(userId);
-      });
-    }
+  void _refreshPlanner() {
+    setState(() => _plannerRefreshKey++);
   }
 
   String _getDayName(int index) {
-    const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const days = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday',
+    ];
     return days[index];
   }
 
@@ -46,6 +43,260 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     return targetDay.toIso8601String().split('T').first;
   }
 
+  Future<void> _showCustomMealSheet(String userId, String date) async {
+    final nameController = TextEditingController();
+    String mealType = 'Lunch';
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: EcoColors.surfaceContainerLowest,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 12,
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 24,
+          ),
+          child: StatefulBuilder(
+            builder: (context, setSheetState) {
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: EcoColors.outlineVariant,
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Add Custom Meal',
+                    style: GoogleFonts.inter(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: EcoColors.onSurface,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Plan for ${_formatDisplayDate(date)}',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      color: EcoColors.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  TextField(
+                    controller: nameController,
+                    decoration: InputDecoration(
+                      labelText: 'Meal Name',
+                      labelStyle: GoogleFonts.inter(
+                        color: EcoColors.onSurfaceVariant,
+                      ),
+                      filled: true,
+                      fillColor: EcoColors.surface,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: EcoColors.outlineVariant),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: EcoColors.outlineVariant),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: const BorderSide(
+                          color: EcoColors.primary,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Meal Type',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: EcoColors.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SegmentedButton<String>(
+                    segments: _mealTypes
+                        .map(
+                          (t) => ButtonSegment<String>(
+                            value: t,
+                            label: Text(
+                              t,
+                              style: GoogleFonts.inter(fontSize: 12),
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    selected: {mealType},
+                    onSelectionChanged: (selected) {
+                      setSheetState(() => mealType = selected.first);
+                    },
+                    style: ButtonStyle(
+                      backgroundColor: WidgetStateProperty.resolveWith((states) {
+                        if (states.contains(WidgetState.selected)) {
+                          return const Color(0xFFE8F5E9);
+                        }
+                        return EcoColors.surface;
+                      }),
+                      foregroundColor: WidgetStateProperty.resolveWith((states) {
+                        if (states.contains(WidgetState.selected)) {
+                          return const Color(0xFF2E7D32);
+                        }
+                        return EcoColors.onSurfaceVariant;
+                      }),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: () async {
+                      final name = nameController.text.trim();
+                      if (name.isEmpty) {
+                        ScaffoldMessenger.of(sheetContext).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Enter a meal name',
+                              style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                            ),
+                            backgroundColor: EcoColors.error,
+                          ),
+                        );
+                        return;
+                      }
+                      await DatabaseService.instance.addPlannedMeal(
+                        userId,
+                        date,
+                        mealType,
+                        name,
+                        isCustom: true,
+                      );
+                      if (!sheetContext.mounted) return;
+                      Navigator.pop(sheetContext);
+                      if (!mounted) return;
+                      _refreshPlanner();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Added $name',
+                            style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                          ),
+                          backgroundColor: const Color(0xFF2E7D32),
+                          behavior: SnackBarBehavior.floating,
+                        ),
+                      );
+                    },
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: Text(
+                      'Save',
+                      style: GoogleFonts.inter(
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        );
+      },
+    );
+
+    nameController.dispose();
+  }
+
+  Future<void> _showRecipeSelectionDialog(
+    BuildContext context,
+    String date,
+    String userId,
+    List<Map<String, dynamic>> recipes,
+  ) async {
+    if (!context.mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: EcoColors.surfaceContainerLowest,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text(
+          'Select a Recipe',
+          style: GoogleFonts.inter(
+            fontWeight: FontWeight.w700,
+            color: EcoColors.onSurface,
+          ),
+        ),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: recipes.isEmpty
+              ? Text(
+                  'No recipes in library yet.',
+                  style: GoogleFonts.inter(color: EcoColors.onSurfaceVariant),
+                )
+              : ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: recipes.length,
+                  itemBuilder: (_, index) {
+                    final recipe = recipes[index];
+                    return ListTile(
+                      title: Text(
+                        recipe['title'] as String? ?? 'Untitled',
+                        style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                      ),
+                      subtitle: Text(
+                        recipe['prepTime'] as String? ?? '',
+                        style: GoogleFonts.inter(fontSize: 12),
+                      ),
+                      onTap: () async {
+                        Navigator.pop(dialogContext);
+                        await DatabaseService.instance.addPlannedMeal(
+                          userId,
+                          date,
+                          'Dinner',
+                          recipe['title'] as String? ?? 'Untitled',
+                          carbonKg: 0.5,
+                          isCustom: false,
+                        );
+                        _refreshPlanner();
+                      },
+                    );
+                  },
+                ),
+        ),
+      ),
+    );
+  }
+
+  String _formatDisplayDate(String iso) {
+    try {
+      final parts = iso.split('-');
+      if (parts.length == 3) {
+        return '${parts[2]}/${parts[1]}/${parts[0]}';
+      }
+    } catch (_) {}
+    return iso;
+  }
+
   @override
   Widget build(BuildContext context) {
     final userId = FirebaseAuth.instance.currentUser?.uid;
@@ -53,52 +304,32 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     if (userId == null) {
       return Scaffold(
         backgroundColor: EcoColors.background,
-        appBar: AppBar(
-          backgroundColor: EcoColors.surface,
-          elevation: 0,
-          leading: IconButton(
-            onPressed: () => Navigator.pop(context),
-            icon: const Icon(Icons.arrow_back_rounded, color: EcoColors.onSurface),
-          ),
-          title: Text(
-            'Sustainable Meal Planner',
-            style: GoogleFonts.inter(
-              fontWeight: FontWeight.w700,
-              fontSize: 18,
-              color: EcoColors.onSurface,
-            ),
-          ),
-        ),
+        appBar: _buildAppBar(),
         body: const SafeArea(
-          child: Center(
-            child: Text('Sign in to plan your meals.'),
-          ),
+          child: Center(child: Text('Sign in to plan your meals.')),
         ),
       );
     }
 
     return Scaffold(
       backgroundColor: EcoColors.background,
-      appBar: AppBar(
-        backgroundColor: EcoColors.surface,
-        elevation: 0,
-        leading: IconButton(
-          onPressed: () => Navigator.pop(context),
-          icon: const Icon(Icons.arrow_back_rounded, color: EcoColors.onSurface),
-        ),
-        title: Text(
-          'Sustainable Meal Planner',
-          style: GoogleFonts.inter(
-            fontWeight: FontWeight.w700,
-            fontSize: 18,
-            color: EcoColors.onSurface,
-          ),
+      appBar: _buildAppBar(),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          final today = DateTime.now().toIso8601String().split('T').first;
+          _showCustomMealSheet(userId, today);
+        },
+        backgroundColor: EcoColors.primary,
+        foregroundColor: EcoColors.onPrimary,
+        icon: const Icon(Icons.add_rounded),
+        label: Text(
+          'Add Custom Meal',
+          style: GoogleFonts.inter(fontWeight: FontWeight.w700),
         ),
       ),
       body: SafeArea(
         child: Column(
           children: [
-            // Section 1: Recipe Library
             Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
@@ -115,12 +346,17 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                   const SizedBox(height: 12),
                   SizedBox(
                     height: 220,
-                    child: FutureBuilder<List<Map<String, dynamic>>>(
-                      future: _recipesFuture,
+                    child: StreamBuilder<List<Map<String, dynamic>>>(
+                      stream:
+                          FirestoreService.instance.watchRecipesWithFallback(),
                       builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
+                        if (snapshot.connectionState ==
+                                ConnectionState.waiting &&
+                            !snapshot.hasData) {
                           return const Center(
-                            child: CircularProgressIndicator(color: EcoColors.primary),
+                            child: CircularProgressIndicator(
+                              color: Color(0xFF2E7D32),
+                            ),
                           );
                         }
 
@@ -135,8 +371,13 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
 
                         final recipes = snapshot.data ?? [];
                         if (recipes.isEmpty) {
-                          return const Center(
-                            child: Text('No recipes available'),
+                          return Center(
+                            child: Text(
+                              'No recipes available',
+                              style: GoogleFonts.inter(
+                                color: EcoColors.onSurfaceVariant,
+                              ),
+                            ),
                           );
                         }
 
@@ -147,14 +388,27 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                           itemBuilder: (context, index) {
                             final recipe = recipes[index];
                             return Padding(
-                              padding: EdgeInsets.only(right: index < recipes.length - 1 ? 12 : 0),
-                              child: _RecipeCard(
-                                title: recipe['title'] as String? ?? 'Untitled',
-                                imageUrl: recipe['imageUrl'] as String? ?? '',
-                                prepTime: recipe['prepTime'] as String? ?? '',
-                                ecoBenefits: (recipe['ecoBenefits'] as List<dynamic>?)?.cast<String>() ?? [],
-                                ingredients: (recipe['ingredients'] as List<dynamic>?)?.cast<String>() ?? [],
-                                steps: (recipe['steps'] as List<dynamic>?)?.cast<String>() ?? [],
+                              padding: EdgeInsets.only(
+                                right: index < recipes.length - 1 ? 12 : 0,
+                              ),
+                              child: SizedBox(
+                                width: 160,
+                                child: _RecipeCard(
+                                  title: recipe['title'] as String? ?? 'Untitled',
+                                  imageUrl: recipe['imageUrl'] as String? ?? '',
+                                  prepTime: recipe['prepTime'] as String? ?? '',
+                                  ecoBenefits: (recipe['ecoBenefits']
+                                              as List<dynamic>?)
+                                          ?.cast<String>() ??
+                                      [],
+                                  ingredients: (recipe['ingredients']
+                                              as List<dynamic>?)
+                                          ?.cast<String>() ??
+                                      [],
+                                  steps: (recipe['steps'] as List<dynamic>?)
+                                          ?.cast<String>() ??
+                                      [],
+                                ),
                               ),
                             );
                           },
@@ -165,11 +419,9 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                 ],
               ),
             ),
-
-            // Section 2: Weekly Planner
             Expanded(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 88),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -183,33 +435,51 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
                     ),
                     const SizedBox(height: 12),
                     Expanded(
-                      child: FutureBuilder<List<Map<String, dynamic>>>(
-                        future: _mealPlansFuture,
-                        builder: (context, snapshot) {
-                          if (snapshot.connectionState == ConnectionState.waiting) {
-                            return const Center(
-                              child: CircularProgressIndicator(color: EcoColors.primary),
-                            );
-                          }
-
-                          final mealPlans = snapshot.data ?? [];
-                          final mealPlansMap = <String, String>{};
-                          for (final plan in mealPlans) {
-                            mealPlansMap[plan['date'] as String] = plan['recipe_title'] as String;
-                          }
+                      child: StreamBuilder<List<Map<String, dynamic>>>(
+                        stream: FirestoreService.instance
+                            .watchRecipesWithFallback(),
+                        builder: (context, recipesSnapshot) {
+                          final recipeList = recipesSnapshot.data ?? [];
 
                           return ListView.separated(
+                            key: ValueKey(_plannerRefreshKey),
                             itemCount: 7,
-                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: 8),
                             itemBuilder: (_, index) {
                               final day = _getDayName(index);
                               final date = _getDateForDay(index);
-                              final plannedMeal = mealPlansMap[date];
 
-                              return _DayPlannerCard(
-                                day: day,
-                                plannedMeal: plannedMeal,
-                                onAddTap: () => _showRecipeSelectionDialog(context, date, userId),
+                              return FutureBuilder<List<Map<String, dynamic>>>(
+                                future: DatabaseService.instance
+                                    .getPlannedMealsForDate(userId, date),
+                                builder: (context, mealSnapshot) {
+                                  if (mealSnapshot.connectionState ==
+                                      ConnectionState.waiting) {
+                                    return _DayPlannerCard(
+                                      day: day,
+                                      meals: const [],
+                                      isLoading: true,
+                                      onAddRecipe: () {},
+                                      onAddCustom: () {},
+                                    );
+                                  }
+
+                                  final meals = mealSnapshot.data ?? [];
+
+                                  return _DayPlannerCard(
+                                    day: day,
+                                    meals: meals,
+                                    onAddRecipe: () => _showRecipeSelectionDialog(
+                                      context,
+                                      date,
+                                      userId,
+                                      recipeList,
+                                    ),
+                                    onAddCustom: () =>
+                                        _showCustomMealSheet(userId, date),
+                                  );
+                                },
                               );
                             },
                           );
@@ -226,41 +496,20 @@ class _MealPlanScreenState extends State<MealPlanScreen> {
     );
   }
 
-  void _showRecipeSelectionDialog(BuildContext context, String date, String userId) async {
-    final recipes = await _recipesFuture;
-    if (!context.mounted) return;
-
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(
-          'Select a Recipe',
-          style: GoogleFonts.inter(
-            fontWeight: FontWeight.w700,
-            color: EcoColors.onSurface,
-          ),
-        ),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: ListView.builder(
-            shrinkWrap: true,
-            itemCount: recipes.length,
-            itemBuilder: (_, index) {
-              final recipe = recipes[index];
-              return ListTile(
-                title: Text(recipe['title'] as String? ?? 'Untitled'),
-                onTap: () async {
-                  Navigator.pop(dialogContext);
-                  await DatabaseService.instance.insertMealPlan(
-                    userId,
-                    date,
-                    recipe['title'] as String? ?? '',
-                  );
-                  _loadData();
-                },
-              );
-            },
-          ),
+  PreferredSizeWidget _buildAppBar() {
+    return AppBar(
+      backgroundColor: EcoColors.surface,
+      elevation: 0,
+      leading: IconButton(
+        onPressed: () => Navigator.pop(context),
+        icon: const Icon(Icons.arrow_back_rounded, color: EcoColors.onSurface),
+      ),
+      title: Text(
+        'Sustainable Meal Planner',
+        style: GoogleFonts.inter(
+          fontWeight: FontWeight.w700,
+          fontSize: 18,
+          color: EcoColors.onSurface,
         ),
       ),
     );
@@ -318,9 +567,9 @@ class _RecipeCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Recipe image
             ClipRRect(
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(12)),
               child: Image.network(
                 imageUrl,
                 width: double.infinity,
@@ -330,16 +579,11 @@ class _RecipeCard extends StatelessWidget {
                   return Container(
                     width: double.infinity,
                     height: 120,
-                    decoration: BoxDecoration(
-                      color: EcoColors.surfaceContainer,
-                      borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
-                    ),
-                    child: Center(
-                      child: Icon(
-                        Icons.restaurant_rounded,
-                        size: 48,
-                        color: EcoColors.primary,
-                      ),
+                    color: const Color(0xFFE8F5E9),
+                    child: const Icon(
+                      Icons.restaurant_rounded,
+                      size: 48,
+                      color: Color(0xFF2E7D32),
                     ),
                   );
                 },
@@ -362,7 +606,8 @@ class _RecipeCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     decoration: BoxDecoration(
                       color: EcoColors.primaryFixed.withValues(alpha: 0.3),
                       borderRadius: BorderRadius.circular(999),
@@ -377,7 +622,7 @@ class _RecipeCard extends StatelessWidget {
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          'Low Carbon Impact',
+                          prepTime.isNotEmpty ? prepTime : 'Eco-friendly',
                           style: GoogleFonts.inter(
                             fontWeight: FontWeight.w600,
                             fontSize: 9,
@@ -399,13 +644,17 @@ class _RecipeCard extends StatelessWidget {
 
 class _DayPlannerCard extends StatelessWidget {
   final String day;
-  final String? plannedMeal;
-  final VoidCallback onAddTap;
+  final List<Map<String, dynamic>> meals;
+  final bool isLoading;
+  final VoidCallback onAddRecipe;
+  final VoidCallback onAddCustom;
 
   const _DayPlannerCard({
     required this.day,
-    this.plannedMeal,
-    required this.onAddTap,
+    required this.meals,
+    this.isLoading = false,
+    required this.onAddRecipe,
+    required this.onAddCustom,
   });
 
   @override
@@ -417,66 +666,134 @@ class _DayPlannerCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: EcoColors.surfaceContainer),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Day label
-          SizedBox(
-            width: 60,
-            child: Text(
-              day,
-              style: GoogleFonts.inter(
-                fontWeight: FontWeight.w600,
-                fontSize: 14,
-                color: EcoColors.onSurface,
-              ),
-            ),
-          ),
-          // Meal slot
-          Expanded(
-            child: Container(
-              height: 40,
-              decoration: BoxDecoration(
-                color: plannedMeal != null
-                    ? EcoColors.primaryFixed.withValues(alpha: 0.2)
-                    : EcoColors.surfaceContainer,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: plannedMeal != null
-                      ? EcoColors.primary
-                      : EcoColors.outlineVariant,
+          Row(
+            children: [
+              SizedBox(
+                width: 72,
+                child: Text(
+                  day,
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                    color: EcoColors.onSurface,
+                  ),
                 ),
               ),
-              alignment: Alignment.center,
+              const Spacer(),
+              IconButton(
+                onPressed: onAddRecipe,
+                icon: const Icon(Icons.menu_book_outlined,
+                    color: EcoColors.primary, size: 20),
+                tooltip: 'Add from library',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              ),
+              IconButton(
+                onPressed: onAddCustom,
+                icon: const Icon(Icons.add_rounded,
+                    color: EcoColors.primary, size: 22),
+                tooltip: 'Add custom meal',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (isLoading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 8),
+              child: Center(
+                child: SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Color(0xFF2E7D32),
+                  ),
+                ),
+              ),
+            )
+          else if (meals.isEmpty)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 12),
+              decoration: BoxDecoration(
+                color: EcoColors.surfaceContainer,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: EcoColors.outlineVariant),
+              ),
               child: Text(
-                plannedMeal ?? 'No meal planned',
+                'No meals planned',
+                textAlign: TextAlign.center,
                 style: GoogleFonts.inter(
-                  fontWeight: FontWeight.w500,
                   fontSize: 13,
-                  color: plannedMeal != null
-                      ? EcoColors.primary
-                      : EcoColors.outline,
+                  color: EcoColors.outline,
                 ),
               ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          // Assign button
-          GestureDetector(
-            onTap: onAddTap,
-            child: Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: EcoColors.primary,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(
-                Icons.add_rounded,
-                color: EcoColors.onPrimary,
-                size: 24,
-              ),
-            ),
-          ),
+            )
+          else
+            ...meals.map((meal) {
+              final title = meal['recipe_title'] as String? ?? 'Meal';
+              final mealType = meal['meal_type'] as String? ?? 'Dinner';
+              final isCustom = (meal['is_custom'] as int? ?? 0) == 1;
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  children: [
+                    if (isCustom)
+                      const CircleAvatar(
+                        radius: 18,
+                        backgroundColor: Color(0xFFE8F5E9),
+                        child: Icon(
+                          Icons.restaurant,
+                          color: Color(0xFF2E7D32),
+                          size: 20,
+                        ),
+                      )
+                    else
+                      CircleAvatar(
+                        radius: 18,
+                        backgroundColor: const Color(0xFFE8F5E9),
+                        child: Text(
+                          mealType.isNotEmpty ? mealType[0] : 'R',
+                          style: GoogleFonts.inter(
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12,
+                            color: const Color(0xFF2E7D32),
+                          ),
+                        ),
+                      ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: GoogleFonts.inter(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                              color: EcoColors.onSurface,
+                            ),
+                          ),
+                          Text(
+                            mealType,
+                            style: GoogleFonts.inter(
+                              fontSize: 11,
+                              color: EcoColors.onSurfaceVariant,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
         ],
       ),
     );
